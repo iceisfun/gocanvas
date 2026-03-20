@@ -9,16 +9,20 @@ import "github.com/iceisfun/gocanvas"
 
 ## Features
 
-- Filled and stroked rectangles, paths, arcs, circles, and ellipses
-- Quadratic and cubic Bezier curves
+- Filled and stroked rectangles, rounded rectangles, paths, arcs, circles, and ellipses
+- Quadratic and cubic Bezier curves, arcTo
 - Affine transforms (translate, scale, rotate, direct matrix)
 - Line caps, joins, miter limits, and dash patterns
 - Stroke modes: screen-space (constant width) or world-space (scales with transform)
+- Composite operations (source-over, destination-over, lighter, multiply, screen, xor, etc.)
+- Anti-aliased edges (8x sub-pixel sampling)
+- Clip paths
 - Global alpha compositing
 - Shadow rendering with box blur
-- TrueType/OpenType font loading, text measurement, and auto-fit
+- TrueType/OpenType font loading, text measurement, auto-fit, text alignment
 - Image drawing with source/destination rectangles (`DrawImage`)
 - Annotation helpers for labeled bounding boxes and polygons
+- Linear and radial gradients for fill and stroke
 - Save/restore state stack
 
 ## Quick Start
@@ -88,6 +92,40 @@ c.Transform(gocanvas.Matrix{a, b, tx, c, d, ty}) // multiply into current
 c.ResetTransform()
 ```
 
+## Rounded Rectangles
+
+```go
+c.FillRoundRect(10, 10, 200, 100, 15)    // filled with corner radius 15
+c.StrokeRoundRect(10, 10, 200, 100, 15)  // stroked outline
+
+// Or as a path for more control
+c.BeginPath()
+c.RoundRect(10, 10, 200, 100, 15)
+c.Fill()
+```
+
+## Clip Paths
+
+```go
+c.Save()
+c.BeginPath()
+c.Arc(200, 150, 100, 0, math.Pi*2)
+c.Clip()                            // only draw inside the circle
+c.FillRect(0, 0, 400, 300)         // clipped to circle
+c.Restore()                         // restores previous clip
+c.ResetClip()                       // or explicitly remove clip
+```
+
+## Composite Operations
+
+```go
+c.SetCompositeOp(gocanvas.CompMultiply)      // multiply blend
+c.SetCompositeOp(gocanvas.CompScreen)        // screen blend
+c.SetCompositeOp(gocanvas.CompLighter)       // additive
+c.SetCompositeOp(gocanvas.CompDestinationOver) // draw behind
+c.SetCompositeOp(gocanvas.CompSourceOver)    // default
+```
+
 ## Text
 
 ```go
@@ -97,6 +135,11 @@ font, _ := gocanvas.LoadFontFile("DejaVuSans-Bold.ttf")
 face, _ := font.NewFace(24)
 c.SetFont(face)
 c.FillText("hello", 10, 50)
+
+// Text alignment
+c.SetTextAlign(gocanvas.TextAlignCenter)
+c.SetTextBaseline(gocanvas.TextBaselineMiddle)
+c.FillText("centered", 200, 150)
 
 // Measure text metrics
 m := c.MeasureText("hello")
@@ -118,6 +161,30 @@ font, _ := gocanvas.LoadFontFile("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bo
 style.Font = font
 
 gocanvas.DrawLabeledBox(c, "owl 0.97", 100, 50, 300, 400, style)
+```
+
+## Gradients
+
+Fill and stroke operations support linear and radial gradients. Gradient
+coordinates are in world space and transform with the current matrix.
+
+```go
+// Linear gradient from left to right.
+lg := gocanvas.NewLinearGradient(0, 0, 400, 0)
+lg.AddColorStop(0, gocanvas.RGB(255, 0, 0))
+lg.AddColorStop(1, gocanvas.RGB(0, 0, 255))
+c.SetFillGradient(lg)
+c.FillRect(0, 0, 400, 300)
+
+// Radial gradient (spotlight effect).
+rg := gocanvas.NewRadialGradient(200, 150, 10, 200, 150, 150)
+rg.AddColorStop(0, gocanvas.RGB(255, 255, 200))
+rg.AddColorStop(1, gocanvas.RGBA(0, 0, 0, 0))
+c.SetFillGradient(rg)
+c.FillRect(0, 0, 400, 300)
+
+// Setting a solid color clears the gradient.
+c.SetFillColor(gocanvas.RGB(0, 0, 0))
 ```
 
 ## Lua Scripting

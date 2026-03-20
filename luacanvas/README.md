@@ -71,6 +71,8 @@ go run ./luacanvas/cmd/gocanvas/ examples/basic.lua
 | `canvas.new(width, height)` | Create a new canvas. Returns a canvas object. |
 | `canvas.load_image(path)` | Load a PNG or JPEG. Returns `{width, height, _id}`. |
 | `canvas.load_font(path)` | Load a TTF/OTF font. Returns `{_id}`. |
+| `canvas.linear_gradient(x0, y0, x1, y1)` | Create a linear gradient. Returns a gradient object. |
+| `canvas.radial_gradient(cx0, cy0, r0, cx1, cy1, r1)` | Create a radial gradient. Returns a gradient object. |
 
 ### Canvas Methods
 
@@ -89,6 +91,35 @@ All methods use `:` syntax (e.g. `c:fill_rect(0, 0, 100, 50)`).
 | `c:set_line_dash_offset(offset)` | Set the dash pattern offset. |
 | `c:set_shadow(opts)` | Set shadow: `{color={r,g,b,a}, blur=N, offset_x=N, offset_y=N}`. |
 | `c:clear_shadow()` | Remove shadow. |
+| `c:set_fill_gradient(gradient)` | Set a gradient as the fill style. |
+| `c:set_stroke_gradient(gradient)` | Set a gradient as the stroke style. |
+| `c:set_text_align(align)` | `"left"`, `"center"`, or `"right"`. |
+| `c:set_text_baseline(baseline)` | `"alphabetic"`, `"top"`, `"middle"`, or `"bottom"`. |
+| `c:set_composite_op(op)` | Set compositing: `"source-over"`, `"multiply"`, `"screen"`, `"lighter"`, etc. |
+
+#### Gradients
+
+Gradient objects are created via `canvas.linear_gradient()` or
+`canvas.radial_gradient()` and support `:add_color_stop()`:
+
+```lua
+local g = canvas.linear_gradient(0, 0, 400, 0)
+g:add_color_stop(0.0, 255, 0, 0)       -- red at start
+g:add_color_stop(1.0, 0, 0, 255)       -- blue at end
+c:set_fill_gradient(g)
+c:fill_rect(0, 0, 400, 300)
+
+local rg = canvas.radial_gradient(200, 150, 0, 200, 150, 100)
+rg:add_color_stop(0.0, 255, 255, 200)
+rg:add_color_stop(1.0, 0, 0, 100, 0)   -- alpha=0 at edge
+c:set_fill_gradient(rg)
+```
+
+| Method | Description |
+|--------|-------------|
+| `g:add_color_stop(pos, r, g, b [, a])` | Add a color stop at position 0-1. |
+
+Setting a solid color with `set_fill_color` clears the gradient, and vice versa.
 
 #### Shapes
 
@@ -97,6 +128,8 @@ All methods use `:` syntax (e.g. `c:fill_rect(0, 0, 100, 50)`).
 | `c:fill_rect(x, y, w, h)` | Fill a rectangle. |
 | `c:stroke_rect(x, y, w, h)` | Stroke a rectangle. |
 | `c:clear_rect(x, y, w, h)` | Clear a rectangle to transparent black. |
+| `c:fill_round_rect(x, y, w, h, r)` | Fill a rounded rectangle with corner radius `r`. |
+| `c:stroke_round_rect(x, y, w, h, r)` | Stroke a rounded rectangle. |
 
 #### Path
 
@@ -106,10 +139,14 @@ All methods use `:` syntax (e.g. `c:fill_rect(0, 0, 100, 50)`).
 | `c:move_to(x, y)` | Move to a point. |
 | `c:line_to(x, y)` | Line to a point. |
 | `c:arc(cx, cy, r, start, end)` | Add an arc (angles in radians). |
+| `c:arc_to(x1, y1, x2, y2, r)` | Add an arc between two tangent lines. |
 | `c:rect(x, y, w, h)` | Add a rectangle sub-path. |
+| `c:round_rect(x, y, w, h, r)` | Add a rounded rectangle sub-path. |
 | `c:close_path()` | Close the current sub-path. |
 | `c:fill()` | Fill the current path. |
 | `c:stroke()` | Stroke the current path. |
+| `c:clip()` | Clip drawing to the current path. |
+| `c:reset_clip()` | Remove the clipping region. |
 
 #### Transform
 
@@ -185,6 +222,18 @@ c:draw_labeled_box("label", x, y, w, h, {
 All style fields are optional and default to green stroke, dark background,
 white text.
 
+#### Clipping
+
+```lua
+c:save()
+c:begin_path()
+c:arc(200, 150, 100, 0, math.pi * 2)
+c:clip()
+c:fill_rect(0, 0, 400, 300)   -- clipped to circle
+c:restore()
+c:reset_clip()                 -- or explicitly remove clip
+```
+
 #### Output
 
 | Method | Description |
@@ -201,3 +250,7 @@ See the [`examples/`](../examples/) directory:
 - **bb.lua** - ML-style bounding box annotations with labels.
 - **concave.lua** - Concave polygon fill and stroke.
 - **dashed.lua** - Dash patterns, dot-dash lines, and glowing dashed strokes.
+- **gradient.lua** - Linear and radial gradients, transforms, and gradient strokes.
+- **roundrect.lua** - Rounded rectangles with various corner radii.
+- **arcto.lua** - ArcTo for smooth tangent arcs.
+- **textalign.lua** - Text alignment and baseline options.
