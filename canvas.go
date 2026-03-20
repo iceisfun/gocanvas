@@ -8,6 +8,20 @@ import (
 	"os"
 )
 
+// StrokeMode controls how line width interacts with transforms.
+type StrokeMode uint8
+
+const (
+	// StrokeModeScreen applies line width in screen pixels.
+	// The stroke width is constant regardless of the current transform.
+	StrokeModeScreen StrokeMode = iota
+
+	// StrokeModeWorld applies line width in world coordinates.
+	// The stroke width scales with the current transform, matching
+	// the HTML5 Canvas behavior.
+	StrokeModeWorld
+)
+
 // drawState holds the mutable drawing state that is saved/restored.
 type drawState struct {
 	matrix      Matrix
@@ -18,6 +32,7 @@ type drawState struct {
 	lineJoin    LineJoin
 	miterLimit  float64
 	globalAlpha float64
+	strokeMode  StrokeMode
 
 	// Dash pattern.
 	lineDash       []float64
@@ -162,6 +177,11 @@ func (c *Canvas) SetMiterLimit(limit float64) {
 	c.state.miterLimit = limit
 }
 
+// SetStrokeMode sets how line width interacts with transforms.
+func (c *Canvas) SetStrokeMode(mode StrokeMode) {
+	c.state.strokeMode = mode
+}
+
 // SetGlobalAlpha sets the global alpha (opacity) for all drawing operations.
 func (c *Canvas) SetGlobalAlpha(a float64) {
 	if a < 0 {
@@ -297,24 +317,7 @@ func (c *Canvas) Fill() {
 // Stroke strokes the current path with the stroke color.
 func (c *Canvas) Stroke() {
 	subPaths := c.path.flatten(defaultFlatness)
-	transformSubPaths(subPaths, c.state.matrix)
-
-	// Apply dash pattern if set.
-	if len(c.state.lineDash) > 0 {
-		subPaths = applyDash(subPaths, c.state.lineDash, c.state.lineDashOffset)
-	}
-
-	outlines := strokePath(subPaths, c.state.lineWidth, c.state.lineCap, c.state.lineJoin, c.state.miterLimit)
-	strokeColor := c.applyAlpha(c.state.stroke)
-	edges := buildEdges(outlines)
-
-	if c.hasShadow() {
-		c.renderWithShadow(func(dst *image.RGBA) {
-			rasterizeFill(dst, edges, strokeColor)
-		})
-	} else {
-		rasterizeFill(c.dst, edges, strokeColor)
-	}
+	c.strokeSubPaths(subPaths)
 }
 
 // FillRect fills a rectangle without affecting the current path.
@@ -340,16 +343,35 @@ func (c *Canvas) StrokeRect(x, y, w, h float64) {
 	var p Path
 	p.Rect(x, y, w, h)
 	subPaths := p.flatten(defaultFlatness)
-	transformSubPaths(subPaths, c.state.matrix)
+	c.strokeSubPaths(subPaths)
+}
 
-	if len(c.state.lineDash) > 0 {
-		subPaths = applyDash(subPaths, c.state.lineDash, c.state.lineDashOffset)
+// strokeSubPaths is the shared stroke implementation for both Stroke and StrokeRect.
+// In StrokeModeScreen (default), line width is in screen pixels — constant regardless of transform.
+// In StrokeModeWorld, line width is in world coordinates — scales with the transform.
+func (c *Canvas) strokeSubPaths(subPaths [][]Point) {
+	if c.state.strokeMode == StrokeModeWorld {
+		// Stroke in world space, then transform to screen space.
+		if len(c.state.lineDash) > 0 {
+			subPaths = applyDash(subPaths, c.state.lineDash, c.state.lineDashOffset)
+		}
+		outlines := strokePath(subPaths, c.state.lineWidth, c.state.lineCap, c.state.lineJoin, c.state.miterLimit)
+		transformSubPaths(outlines, c.state.matrix)
+		c.rasterizeOutlines(outlines)
+	} else {
+		// Transform to screen space, then stroke at constant width.
+		transformSubPaths(subPaths, c.state.matrix)
+		if len(c.state.lineDash) > 0 {
+			subPaths = applyDash(subPaths, c.state.lineDash, c.state.lineDashOffset)
+		}
+		outlines := strokePath(subPaths, c.state.lineWidth, c.state.lineCap, c.state.lineJoin, c.state.miterLimit)
+		c.rasterizeOutlines(outlines)
 	}
+}
 
-	outlines := strokePath(subPaths, c.state.lineWidth, c.state.lineCap, c.state.lineJoin, c.state.miterLimit)
+func (c *Canvas) rasterizeOutlines(outlines [][]Point) {
 	strokeColor := c.applyAlpha(c.state.stroke)
 	edges := buildEdges(outlines)
-
 	if c.hasShadow() {
 		c.renderWithShadow(func(dst *image.RGBA) {
 			rasterizeFill(dst, edges, strokeColor)
