@@ -29,20 +29,23 @@ import (
 )
 
 // Bindings manages the state for canvas Lua bindings.
-// Each instance maintains its own image and font registries,
+// Each instance maintains its own image, font, and gradient registries,
 // so multiple VMs can be used independently.
 type Bindings struct {
-	images     map[int64]image.Image
-	nextImgID  int64
-	fonts      map[int64]*gocanvas.Font
-	nextFontID int64
+	images      map[int64]image.Image
+	nextImgID   int64
+	fonts       map[int64]*gocanvas.Font
+	nextFontID  int64
+	gradients   map[int64]gocanvas.Gradient
+	nextGradID  int64
 }
 
 // New creates a new Bindings instance.
 func New() *Bindings {
 	return &Bindings{
-		images: make(map[int64]image.Image),
-		fonts:  make(map[int64]*gocanvas.Font),
+		images:    make(map[int64]image.Image),
+		fonts:     make(map[int64]*gocanvas.Font),
+		gradients: make(map[int64]gocanvas.Gradient),
 	}
 }
 
@@ -54,6 +57,8 @@ func (b *Bindings) Register(v *vm.VM) {
 	mod.SetString("new", vm.NewNativeFunc(b.canvasNew))
 	mod.SetString("load_image", vm.NewNativeFunc(b.canvasLoadImage))
 	mod.SetString("load_font", vm.NewNativeFunc(b.canvasLoadFont))
+	mod.SetString("linear_gradient", vm.NewNativeFunc(b.canvasLinearGradient))
+	mod.SetString("radial_gradient", vm.NewNativeFunc(b.canvasRadialGradient))
 	v.SetGlobal("canvas", vm.NewTable(mod))
 }
 
@@ -136,6 +141,32 @@ func (b *Bindings) canvasToLua(c *gocanvas.Canvas) *vm.Table {
 		c.SetStrokeColor(color.RGBA{R: r, G: g, B: b, A: a})
 		return 0
 	}))
+	t.SetString("set_fill_gradient", vm.NewNativeFunc(func(v *vm.VM) int {
+		gradTbl := v.Get(2)
+		if !gradTbl.IsTable() {
+			panic(&vm.LuaError{Value: vm.NewString("set_fill_gradient: argument must be a gradient table")})
+		}
+		id := gradTbl.AsTable().Get(vm.NewString("_id")).AsInt()
+		g := b.gradients[id]
+		if g == nil {
+			panic(&vm.LuaError{Value: vm.NewString("set_fill_gradient: invalid gradient reference")})
+		}
+		c.SetFillGradient(g)
+		return 0
+	}))
+	t.SetString("set_stroke_gradient", vm.NewNativeFunc(func(v *vm.VM) int {
+		gradTbl := v.Get(2)
+		if !gradTbl.IsTable() {
+			panic(&vm.LuaError{Value: vm.NewString("set_stroke_gradient: argument must be a gradient table")})
+		}
+		id := gradTbl.AsTable().Get(vm.NewString("_id")).AsInt()
+		g := b.gradients[id]
+		if g == nil {
+			panic(&vm.LuaError{Value: vm.NewString("set_stroke_gradient: invalid gradient reference")})
+		}
+		c.SetStrokeGradient(g)
+		return 0
+	}))
 	t.SetString("set_line_width", vm.NewNativeFunc(func(v *vm.VM) int {
 		c.SetLineWidth(v.Get(2).AsFloat())
 		return 0
@@ -206,6 +237,20 @@ func (b *Bindings) canvasToLua(c *gocanvas.Canvas) *vm.Table {
 		return 0
 	}))
 
+	// Rounded rectangles.
+	t.SetString("round_rect", vm.NewNativeFunc(func(v *vm.VM) int {
+		c.RoundRect(v.Get(2).AsFloat(), v.Get(3).AsFloat(), v.Get(4).AsFloat(), v.Get(5).AsFloat(), v.Get(6).AsFloat())
+		return 0
+	}))
+	t.SetString("fill_round_rect", vm.NewNativeFunc(func(v *vm.VM) int {
+		c.FillRoundRect(v.Get(2).AsFloat(), v.Get(3).AsFloat(), v.Get(4).AsFloat(), v.Get(5).AsFloat(), v.Get(6).AsFloat())
+		return 0
+	}))
+	t.SetString("stroke_round_rect", vm.NewNativeFunc(func(v *vm.VM) int {
+		c.StrokeRoundRect(v.Get(2).AsFloat(), v.Get(3).AsFloat(), v.Get(4).AsFloat(), v.Get(5).AsFloat(), v.Get(6).AsFloat())
+		return 0
+	}))
+
 	// Path.
 	t.SetString("begin_path", vm.NewNativeFunc(func(v *vm.VM) int {
 		c.BeginPath()
@@ -221,6 +266,10 @@ func (b *Bindings) canvasToLua(c *gocanvas.Canvas) *vm.Table {
 	}))
 	t.SetString("arc", vm.NewNativeFunc(func(v *vm.VM) int {
 		c.Arc(v.Get(2).AsFloat(), v.Get(3).AsFloat(), v.Get(4).AsFloat(), v.Get(5).AsFloat(), v.Get(6).AsFloat())
+		return 0
+	}))
+	t.SetString("arc_to", vm.NewNativeFunc(func(v *vm.VM) int {
+		c.ArcTo(v.Get(2).AsFloat(), v.Get(3).AsFloat(), v.Get(4).AsFloat(), v.Get(5).AsFloat(), v.Get(6).AsFloat())
 		return 0
 	}))
 	t.SetString("rect", vm.NewNativeFunc(func(v *vm.VM) int {
@@ -294,6 +343,81 @@ func (b *Bindings) canvasToLua(c *gocanvas.Canvas) *vm.Table {
 		default:
 			panic(&vm.LuaError{Value: vm.NewString("set_stroke_mode: expected \"screen\" or \"world\"")})
 		}
+		return 0
+	}))
+
+	// Text alignment.
+	t.SetString("set_text_align", vm.NewNativeFunc(func(v *vm.VM) int {
+		arg := v.Get(2)
+		if !arg.IsString() {
+			panic(&vm.LuaError{Value: vm.NewString("set_text_align: expected \"left\", \"center\", or \"right\"")})
+		}
+		switch arg.AsString() {
+		case "left":
+			c.SetTextAlign(gocanvas.TextAlignLeft)
+		case "center":
+			c.SetTextAlign(gocanvas.TextAlignCenter)
+		case "right":
+			c.SetTextAlign(gocanvas.TextAlignRight)
+		default:
+			panic(&vm.LuaError{Value: vm.NewString("set_text_align: expected \"left\", \"center\", or \"right\"")})
+		}
+		return 0
+	}))
+	t.SetString("set_text_baseline", vm.NewNativeFunc(func(v *vm.VM) int {
+		arg := v.Get(2)
+		if !arg.IsString() {
+			panic(&vm.LuaError{Value: vm.NewString("set_text_baseline: expected \"alphabetic\", \"top\", \"middle\", or \"bottom\"")})
+		}
+		switch arg.AsString() {
+		case "alphabetic":
+			c.SetTextBaseline(gocanvas.TextBaselineAlphabetic)
+		case "top":
+			c.SetTextBaseline(gocanvas.TextBaselineTop)
+		case "middle":
+			c.SetTextBaseline(gocanvas.TextBaselineMiddle)
+		case "bottom":
+			c.SetTextBaseline(gocanvas.TextBaselineBottom)
+		default:
+			panic(&vm.LuaError{Value: vm.NewString("set_text_baseline: expected \"alphabetic\", \"top\", \"middle\", or \"bottom\"")})
+		}
+		return 0
+	}))
+
+	// Composite operations.
+	t.SetString("set_composite_op", vm.NewNativeFunc(func(v *vm.VM) int {
+		arg := v.Get(2)
+		if !arg.IsString() {
+			panic(&vm.LuaError{Value: vm.NewString("set_composite_op: expected string")})
+		}
+		opMap := map[string]gocanvas.CompositeOp{
+			"source-over":      gocanvas.CompSourceOver,
+			"destination-over": gocanvas.CompDestinationOver,
+			"source-in":        gocanvas.CompSourceIn,
+			"destination-in":   gocanvas.CompDestinationIn,
+			"source-out":       gocanvas.CompSourceOut,
+			"destination-out":  gocanvas.CompDestinationOut,
+			"lighter":          gocanvas.CompLighter,
+			"copy":             gocanvas.CompCopy,
+			"xor":              gocanvas.CompXOR,
+			"multiply":         gocanvas.CompMultiply,
+			"screen":           gocanvas.CompScreen,
+		}
+		op, ok := opMap[arg.AsString()]
+		if !ok {
+			panic(&vm.LuaError{Value: vm.NewString("set_composite_op: unknown operation: " + arg.AsString())})
+		}
+		c.SetCompositeOp(op)
+		return 0
+	}))
+
+	// Clipping.
+	t.SetString("clip", vm.NewNativeFunc(func(v *vm.VM) int {
+		c.Clip()
+		return 0
+	}))
+	t.SetString("reset_clip", vm.NewNativeFunc(func(v *vm.VM) int {
+		c.ResetClip()
 		return 0
 	}))
 
@@ -515,6 +639,26 @@ func (b *Bindings) canvasToLua(c *gocanvas.Canvas) *vm.Table {
 		return 0
 	}))
 
+	// Pixel access.
+	t.SetString("set_pixel", vm.NewNativeFunc(func(v *vm.VM) int {
+		x := int(v.Get(2).AsInt())
+		y := int(v.Get(3).AsInt())
+		r, g, b, a := colorArgs(v, 4)
+		c.SetPixel(x, y, color.RGBA{r, g, b, a})
+		return 0
+	}))
+
+	t.SetString("get_pixel", vm.NewNativeFunc(func(v *vm.VM) int {
+		x := int(v.Get(2).AsInt())
+		y := int(v.Get(3).AsInt())
+		col := c.GetPixel(x, y)
+		v.Set(0, vm.NewInt(int64(col.R)))
+		v.Set(1, vm.NewInt(int64(col.G)))
+		v.Set(2, vm.NewInt(int64(col.B)))
+		v.Set(3, vm.NewInt(int64(col.A)))
+		return 4
+	}))
+
 	// Output.
 	t.SetString("save_png", vm.NewNativeFunc(func(v *vm.VM) int {
 		path := v.Get(2)
@@ -550,4 +694,67 @@ func colorFromTable(tbl vm.LuaTable) color.RGBA {
 		a = uint8(v.AsInt())
 	}
 	return color.RGBA{R: r, G: g, B: b, A: a}
+}
+
+func (b *Bindings) canvasLinearGradient(v *vm.VM) int {
+	x0 := v.Get(1).AsFloat()
+	y0 := v.Get(2).AsFloat()
+	x1 := v.Get(3).AsFloat()
+	y1 := v.Get(4).AsFloat()
+	g := gocanvas.NewLinearGradient(x0, y0, x1, y1)
+
+	b.nextGradID++
+	id := b.nextGradID
+	b.gradients[id] = g
+
+	t := vm.NewEmptyTable()
+	t.SetString("_id", vm.NewInt(id))
+	t.SetString("add_color_stop", vm.NewNativeFunc(func(v *vm.VM) int {
+		// self=arg1, position=arg2, r=arg3, g=arg4, b=arg5, a=arg6 optional
+		pos := v.Get(2).AsFloat()
+		r := uint8(v.Get(3).AsInt())
+		gv := uint8(v.Get(4).AsInt())
+		bv := uint8(v.Get(5).AsInt())
+		a := uint8(255)
+		if arg := v.Get(6); arg.IsNumber() {
+			a = uint8(arg.AsInt())
+		}
+		g.AddColorStop(pos, color.RGBA{R: r, G: gv, B: bv, A: a})
+		return 0
+	}))
+
+	v.Set(0, vm.NewTable(t))
+	return 1
+}
+
+func (b *Bindings) canvasRadialGradient(v *vm.VM) int {
+	cx0 := v.Get(1).AsFloat()
+	cy0 := v.Get(2).AsFloat()
+	r0 := v.Get(3).AsFloat()
+	cx1 := v.Get(4).AsFloat()
+	cy1 := v.Get(5).AsFloat()
+	r1 := v.Get(6).AsFloat()
+	g := gocanvas.NewRadialGradient(cx0, cy0, r0, cx1, cy1, r1)
+
+	b.nextGradID++
+	id := b.nextGradID
+	b.gradients[id] = g
+
+	t := vm.NewEmptyTable()
+	t.SetString("_id", vm.NewInt(id))
+	t.SetString("add_color_stop", vm.NewNativeFunc(func(v *vm.VM) int {
+		pos := v.Get(2).AsFloat()
+		r := uint8(v.Get(3).AsInt())
+		gv := uint8(v.Get(4).AsInt())
+		bv := uint8(v.Get(5).AsInt())
+		a := uint8(255)
+		if arg := v.Get(6); arg.IsNumber() {
+			a = uint8(arg.AsInt())
+		}
+		g.AddColorStop(pos, color.RGBA{R: r, G: gv, B: bv, A: a})
+		return 0
+	}))
+
+	v.Set(0, vm.NewTable(t))
+	return 1
 }
