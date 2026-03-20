@@ -10,14 +10,27 @@ import (
 
 // drawState holds the mutable drawing state that is saved/restored.
 type drawState struct {
-	matrix     Matrix
-	fill       color.RGBA
-	stroke     color.RGBA
-	lineWidth  float64
-	lineCap    LineCap
-	lineJoin   LineJoin
-	miterLimit float64
+	matrix      Matrix
+	fill        color.RGBA
+	stroke      color.RGBA
+	lineWidth   float64
+	lineCap     LineCap
+	lineJoin    LineJoin
+	miterLimit  float64
 	globalAlpha float64
+
+	// Dash pattern.
+	lineDash       []float64
+	lineDashOffset float64
+
+	// Shadow.
+	shadowColor   color.RGBA
+	shadowBlur    float64
+	shadowOffsetX float64
+	shadowOffsetY float64
+
+	// Font.
+	fontFace *FontFace
 }
 
 // Canvas provides a 2D drawing surface with an HTML5 Canvas-like API.
@@ -67,7 +80,13 @@ func (c *Canvas) Height() int { return c.height }
 
 // Save pushes the current drawing state onto the state stack.
 func (c *Canvas) Save() {
-	c.stack = append(c.stack, c.state)
+	cp := c.state
+	if cp.lineDash != nil {
+		dash := make([]float64, len(cp.lineDash))
+		copy(dash, cp.lineDash)
+		cp.lineDash = dash
+	}
+	c.stack = append(c.stack, cp)
 }
 
 // Restore pops the most recently saved drawing state. No-op if the stack is empty.
@@ -154,6 +173,67 @@ func (c *Canvas) SetGlobalAlpha(a float64) {
 	c.state.globalAlpha = a
 }
 
+// --- Dash methods ---
+
+// SetLineDash sets the dash pattern for stroke operations. Even indices are
+// draw lengths, odd indices are gap lengths. An empty slice means solid.
+// If the pattern has an odd length, it is doubled (per HTML5 Canvas spec).
+func (c *Canvas) SetLineDash(pattern []float64) {
+	if len(pattern) == 0 {
+		c.state.lineDash = nil
+		return
+	}
+	if len(pattern)%2 != 0 {
+		pattern = append(pattern, pattern...)
+	}
+	dash := make([]float64, len(pattern))
+	copy(dash, pattern)
+	c.state.lineDash = dash
+}
+
+// LineDash returns the current dash pattern.
+func (c *Canvas) LineDash() []float64 {
+	if c.state.lineDash == nil {
+		return nil
+	}
+	dash := make([]float64, len(c.state.lineDash))
+	copy(dash, c.state.lineDash)
+	return dash
+}
+
+// SetLineDashOffset sets the dash pattern offset.
+func (c *Canvas) SetLineDashOffset(offset float64) {
+	c.state.lineDashOffset = offset
+}
+
+// --- Shadow methods ---
+
+// SetShadowColor sets the shadow color.
+func (c *Canvas) SetShadowColor(col color.RGBA) {
+	c.state.shadowColor = col
+}
+
+// SetShadowBlur sets the shadow blur radius.
+func (c *Canvas) SetShadowBlur(radius float64) {
+	if radius < 0 {
+		radius = 0
+	}
+	c.state.shadowBlur = radius
+}
+
+// SetShadowOffset sets the shadow offset.
+func (c *Canvas) SetShadowOffset(dx, dy float64) {
+	c.state.shadowOffsetX = dx
+	c.state.shadowOffsetY = dy
+}
+
+// --- Font methods ---
+
+// SetFont sets the current font face for text rendering.
+func (c *Canvas) SetFont(face *FontFace) {
+	c.state.fontFace = face
+}
+
 // --- Path methods ---
 
 // BeginPath clears the current path.
@@ -204,7 +284,14 @@ func (c *Canvas) Fill() {
 	transformSubPaths(subPaths, c.state.matrix)
 	fillColor := c.applyAlpha(c.state.fill)
 	edges := buildEdges(subPaths)
-	rasterizeFill(c.dst, edges, fillColor)
+
+	if c.hasShadow() {
+		c.renderWithShadow(func(dst *image.RGBA) {
+			rasterizeFill(dst, edges, fillColor)
+		})
+	} else {
+		rasterizeFill(c.dst, edges, fillColor)
+	}
 }
 
 // Stroke strokes the current path with the stroke color.
@@ -212,12 +299,22 @@ func (c *Canvas) Stroke() {
 	subPaths := c.path.flatten(defaultFlatness)
 	transformSubPaths(subPaths, c.state.matrix)
 
-	// Convert stroke to fill outline.
-	outlines := strokePath(subPaths, c.state.lineWidth, c.state.lineCap, c.state.lineJoin, c.state.miterLimit)
+	// Apply dash pattern if set.
+	if len(c.state.lineDash) > 0 {
+		subPaths = applyDash(subPaths, c.state.lineDash, c.state.lineDashOffset)
+	}
 
+	outlines := strokePath(subPaths, c.state.lineWidth, c.state.lineCap, c.state.lineJoin, c.state.miterLimit)
 	strokeColor := c.applyAlpha(c.state.stroke)
 	edges := buildEdges(outlines)
-	rasterizeFill(c.dst, edges, strokeColor)
+
+	if c.hasShadow() {
+		c.renderWithShadow(func(dst *image.RGBA) {
+			rasterizeFill(dst, edges, strokeColor)
+		})
+	} else {
+		rasterizeFill(c.dst, edges, strokeColor)
+	}
 }
 
 // FillRect fills a rectangle without affecting the current path.
@@ -228,7 +325,14 @@ func (c *Canvas) FillRect(x, y, w, h float64) {
 	transformSubPaths(subPaths, c.state.matrix)
 	fillColor := c.applyAlpha(c.state.fill)
 	edges := buildEdges(subPaths)
-	rasterizeFill(c.dst, edges, fillColor)
+
+	if c.hasShadow() {
+		c.renderWithShadow(func(dst *image.RGBA) {
+			rasterizeFill(dst, edges, fillColor)
+		})
+	} else {
+		rasterizeFill(c.dst, edges, fillColor)
+	}
 }
 
 // StrokeRect strokes a rectangle without affecting the current path.
@@ -237,10 +341,22 @@ func (c *Canvas) StrokeRect(x, y, w, h float64) {
 	p.Rect(x, y, w, h)
 	subPaths := p.flatten(defaultFlatness)
 	transformSubPaths(subPaths, c.state.matrix)
+
+	if len(c.state.lineDash) > 0 {
+		subPaths = applyDash(subPaths, c.state.lineDash, c.state.lineDashOffset)
+	}
+
 	outlines := strokePath(subPaths, c.state.lineWidth, c.state.lineCap, c.state.lineJoin, c.state.miterLimit)
 	strokeColor := c.applyAlpha(c.state.stroke)
 	edges := buildEdges(outlines)
-	rasterizeFill(c.dst, edges, strokeColor)
+
+	if c.hasShadow() {
+		c.renderWithShadow(func(dst *image.RGBA) {
+			rasterizeFill(dst, edges, strokeColor)
+		})
+	} else {
+		rasterizeFill(c.dst, edges, strokeColor)
+	}
 }
 
 // ClearRect sets all pixels in the rectangle to transparent black.
