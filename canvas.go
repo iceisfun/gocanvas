@@ -22,6 +22,54 @@ const (
 	StrokeModeWorld
 )
 
+// TextAlign controls horizontal text alignment relative to the x coordinate.
+type TextAlign uint8
+
+const (
+	// TextAlignLeft aligns the left edge of the text at x (default).
+	TextAlignLeft TextAlign = iota
+
+	// TextAlignCenter centers the text horizontally at x.
+	TextAlignCenter
+
+	// TextAlignRight aligns the right edge of the text at x.
+	TextAlignRight
+)
+
+// TextBaseline controls vertical text alignment relative to the y coordinate.
+type TextBaseline uint8
+
+const (
+	// TextBaselineAlphabetic positions y at the text baseline (default).
+	TextBaselineAlphabetic TextBaseline = iota
+
+	// TextBaselineTop positions y at the top of the em box.
+	TextBaselineTop
+
+	// TextBaselineMiddle positions y at the vertical center of the em box.
+	TextBaselineMiddle
+
+	// TextBaselineBottom positions y at the bottom of the em box.
+	TextBaselineBottom
+)
+
+// CompositeOp specifies the compositing operation used when blending pixels.
+type CompositeOp uint8
+
+const (
+	CompSourceOver      CompositeOp = iota // default: draw source over destination
+	CompDestinationOver                    // draw behind existing content
+	CompSourceIn                           // show source only where destination exists
+	CompDestinationIn                      // keep destination only where source would draw
+	CompSourceOut                          // show source only where destination is transparent
+	CompDestinationOut                     // erase destination where source would draw
+	CompLighter                            // additive blending
+	CompCopy                               // replace entirely (no blending)
+	CompXOR                                // XOR compositing
+	CompMultiply                           // multiply channels
+	CompScreen                             // screen blend
+)
+
 // drawState holds the mutable drawing state that is saved/restored.
 type drawState struct {
 	matrix      Matrix
@@ -45,7 +93,19 @@ type drawState struct {
 	shadowOffsetY float64
 
 	// Font.
-	fontFace *FontFace
+	fontFace     *FontFace
+	textAlign    TextAlign
+	textBaseline TextBaseline
+
+	// Compositing.
+	compositeOp CompositeOp
+
+	// Clip mask (nil = no clipping).
+	clip *image.Alpha
+
+	// Gradients (nil = use solid color).
+	fillGradient   Gradient
+	strokeGradient Gradient
 }
 
 // Canvas provides a 2D drawing surface with an HTML5 Canvas-like API.
@@ -101,6 +161,11 @@ func (c *Canvas) Save() {
 		copy(dash, cp.lineDash)
 		cp.lineDash = dash
 	}
+	if cp.clip != nil {
+		dup := image.NewAlpha(cp.clip.Bounds())
+		copy(dup.Pix, cp.clip.Pix)
+		cp.clip = dup
+	}
 	c.stack = append(c.stack, cp)
 }
 
@@ -147,14 +212,30 @@ func (c *Canvas) ResetTransform() {
 
 // --- Style setters ---
 
-// SetFillColor sets the fill color.
+// SetFillColor sets the fill color and clears any fill gradient.
 func (c *Canvas) SetFillColor(col color.RGBA) {
 	c.state.fill = col
+	c.state.fillGradient = nil
 }
 
-// SetStrokeColor sets the stroke color.
+// SetStrokeColor sets the stroke color and clears any stroke gradient.
 func (c *Canvas) SetStrokeColor(col color.RGBA) {
 	c.state.stroke = col
+	c.state.strokeGradient = nil
+}
+
+// SetFillGradient sets a gradient as the fill style. The gradient coordinates
+// are in the same coordinate space as drawing operations (world space).
+// Clears any previously set fill color.
+func (c *Canvas) SetFillGradient(g Gradient) {
+	c.state.fillGradient = g
+}
+
+// SetStrokeGradient sets a gradient as the stroke style. The gradient
+// coordinates are in the same coordinate space as drawing operations (world space).
+// Clears any previously set stroke color.
+func (c *Canvas) SetStrokeGradient(g Gradient) {
+	c.state.strokeGradient = g
 }
 
 // SetLineWidth sets the line width for stroke operations.
@@ -254,6 +335,21 @@ func (c *Canvas) SetFont(face *FontFace) {
 	c.state.fontFace = face
 }
 
+// SetTextAlign sets the horizontal text alignment.
+func (c *Canvas) SetTextAlign(align TextAlign) {
+	c.state.textAlign = align
+}
+
+// SetTextBaseline sets the vertical text baseline.
+func (c *Canvas) SetTextBaseline(baseline TextBaseline) {
+	c.state.textBaseline = baseline
+}
+
+// SetCompositeOp sets the compositing operation for all drawing.
+func (c *Canvas) SetCompositeOp(op CompositeOp) {
+	c.state.compositeOp = op
+}
+
 // --- Path methods ---
 
 // BeginPath clears the current path.
@@ -286,6 +382,12 @@ func (c *Canvas) Arc(cx, cy, r, startAngle, endAngle float64) {
 	c.path.Arc(cx, cy, r, startAngle, endAngle)
 }
 
+// ArcTo adds an arc tangent to two lines defined by the current point,
+// (x1, y1), and (x2, y2), with the given radius.
+func (c *Canvas) ArcTo(x1, y1, x2, y2, radius float64) {
+	c.path.ArcTo(x1, y1, x2, y2, radius)
+}
+
 // ClosePath closes the current sub-path.
 func (c *Canvas) ClosePath() {
 	c.path.Close()
@@ -296,22 +398,109 @@ func (c *Canvas) Rect(x, y, w, h float64) {
 	c.path.Rect(x, y, w, h)
 }
 
+// RoundRect adds a rounded rectangular sub-path to the current path.
+func (c *Canvas) RoundRect(x, y, w, h, radius float64) {
+	c.path.RoundRect(x, y, w, h, radius)
+}
+
+// --- Clipping ---
+
+// Clip intersects the current clipping region with the current path.
+// After calling Clip, only pixels inside the path will be affected by
+// drawing operations. The current path is consumed.
+func (c *Canvas) Clip() {
+	subPaths := c.path.flatten(defaultFlatness)
+	transformSubPaths(subPaths, c.state.matrix)
+	edges := buildEdges(subPaths)
+
+	mask := rasterizeMask(c.width, c.height, edges)
+
+	if c.state.clip != nil {
+		// Intersect: AND with existing clip.
+		for i, a := range mask.Pix {
+			mask.Pix[i] = uint8(uint32(a) * uint32(c.state.clip.Pix[i]) / 255)
+		}
+	}
+	c.state.clip = mask
+}
+
+// ResetClip removes the current clipping region, so that drawing
+// operations once again affect the entire canvas.
+func (c *Canvas) ResetClip() {
+	c.state.clip = nil
+}
+
 // --- Drawing methods ---
 
-// Fill fills the current path with the fill color.
+// clipDraw renders fn into a temporary buffer and composites the result
+// through the current clip mask onto the canvas destination.
+func (c *Canvas) clipDraw(fn func(dst *image.RGBA)) {
+	if c.state.clip == nil {
+		fn(c.dst)
+		return
+	}
+	tmp := image.NewRGBA(c.dst.Bounds())
+	fn(tmp)
+	bounds := c.dst.Bounds()
+	op := c.state.compositeOp
+	for y := bounds.Min.Y; y < bounds.Max.Y; y++ {
+		for x := bounds.Min.X; x < bounds.Max.X; x++ {
+			off := tmp.PixOffset(x, y)
+			sa := uint32(tmp.Pix[off+3])
+			if sa == 0 {
+				continue
+			}
+			clipOff := c.state.clip.PixOffset(x, y)
+			clipA := uint32(c.state.clip.Pix[clipOff])
+			if clipA == 0 {
+				continue
+			}
+			sr := uint32(tmp.Pix[off+0]) * clipA / 255
+			sg := uint32(tmp.Pix[off+1]) * clipA / 255
+			sb := uint32(tmp.Pix[off+2]) * clipA / 255
+			sa = sa * clipA / 255
+			blendPixelPremul(c.dst, x, y, sr, sg, sb, sa, op)
+		}
+	}
+}
+
+// fillEdges is the shared fill implementation respecting clip, shadow, gradient, and composite op.
+func (c *Canvas) fillEdges(edges []edge) {
+	op := c.state.compositeOp
+	if c.state.fillGradient != nil {
+		inv, ok := c.state.matrix.Invert()
+		if !ok {
+			return
+		}
+		if c.hasShadow() {
+			c.renderWithShadow(func(dst *image.RGBA) {
+				rasterizeGradientFill(dst, edges, c.state.fillGradient, inv, c.state.globalAlpha, op)
+			})
+		} else {
+			c.clipDraw(func(dst *image.RGBA) {
+				rasterizeGradientFill(dst, edges, c.state.fillGradient, inv, c.state.globalAlpha, op)
+			})
+		}
+	} else {
+		fillColor := c.applyAlpha(c.state.fill)
+		if c.hasShadow() {
+			c.renderWithShadow(func(dst *image.RGBA) {
+				rasterizeFill(dst, edges, fillColor, op)
+			})
+		} else {
+			c.clipDraw(func(dst *image.RGBA) {
+				rasterizeFill(dst, edges, fillColor, op)
+			})
+		}
+	}
+}
+
+// Fill fills the current path with the fill color or gradient.
 func (c *Canvas) Fill() {
 	subPaths := c.path.flatten(defaultFlatness)
 	transformSubPaths(subPaths, c.state.matrix)
-	fillColor := c.applyAlpha(c.state.fill)
 	edges := buildEdges(subPaths)
-
-	if c.hasShadow() {
-		c.renderWithShadow(func(dst *image.RGBA) {
-			rasterizeFill(dst, edges, fillColor)
-		})
-	} else {
-		rasterizeFill(c.dst, edges, fillColor)
-	}
+	c.fillEdges(edges)
 }
 
 // Stroke strokes the current path with the stroke color.
@@ -326,22 +515,32 @@ func (c *Canvas) FillRect(x, y, w, h float64) {
 	p.Rect(x, y, w, h)
 	subPaths := p.flatten(defaultFlatness)
 	transformSubPaths(subPaths, c.state.matrix)
-	fillColor := c.applyAlpha(c.state.fill)
 	edges := buildEdges(subPaths)
-
-	if c.hasShadow() {
-		c.renderWithShadow(func(dst *image.RGBA) {
-			rasterizeFill(dst, edges, fillColor)
-		})
-	} else {
-		rasterizeFill(c.dst, edges, fillColor)
-	}
+	c.fillEdges(edges)
 }
 
 // StrokeRect strokes a rectangle without affecting the current path.
 func (c *Canvas) StrokeRect(x, y, w, h float64) {
 	var p Path
 	p.Rect(x, y, w, h)
+	subPaths := p.flatten(defaultFlatness)
+	c.strokeSubPaths(subPaths)
+}
+
+// FillRoundRect fills a rounded rectangle without affecting the current path.
+func (c *Canvas) FillRoundRect(x, y, w, h, radius float64) {
+	var p Path
+	p.RoundRect(x, y, w, h, radius)
+	subPaths := p.flatten(defaultFlatness)
+	transformSubPaths(subPaths, c.state.matrix)
+	edges := buildEdges(subPaths)
+	c.fillEdges(edges)
+}
+
+// StrokeRoundRect strokes a rounded rectangle without affecting the current path.
+func (c *Canvas) StrokeRoundRect(x, y, w, h, radius float64) {
+	var p Path
+	p.RoundRect(x, y, w, h, radius)
 	subPaths := p.flatten(defaultFlatness)
 	c.strokeSubPaths(subPaths)
 }
@@ -370,14 +569,33 @@ func (c *Canvas) strokeSubPaths(subPaths [][]Point) {
 }
 
 func (c *Canvas) rasterizeOutlines(outlines [][]Point) {
-	strokeColor := c.applyAlpha(c.state.stroke)
 	edges := buildEdges(outlines)
-	if c.hasShadow() {
-		c.renderWithShadow(func(dst *image.RGBA) {
-			rasterizeFill(dst, edges, strokeColor)
-		})
+	op := c.state.compositeOp
+	if c.state.strokeGradient != nil {
+		inv, ok := c.state.matrix.Invert()
+		if !ok {
+			return
+		}
+		if c.hasShadow() {
+			c.renderWithShadow(func(dst *image.RGBA) {
+				rasterizeGradientFill(dst, edges, c.state.strokeGradient, inv, c.state.globalAlpha, op)
+			})
+		} else {
+			c.clipDraw(func(dst *image.RGBA) {
+				rasterizeGradientFill(dst, edges, c.state.strokeGradient, inv, c.state.globalAlpha, op)
+			})
+		}
 	} else {
-		rasterizeFill(c.dst, edges, strokeColor)
+		strokeColor := c.applyAlpha(c.state.stroke)
+		if c.hasShadow() {
+			c.renderWithShadow(func(dst *image.RGBA) {
+				rasterizeFill(dst, edges, strokeColor, op)
+			})
+		} else {
+			c.clipDraw(func(dst *image.RGBA) {
+				rasterizeFill(dst, edges, strokeColor, op)
+			})
+		}
 	}
 }
 
@@ -429,6 +647,36 @@ func clampInt(v, lo, hi int) int {
 		return hi
 	}
 	return v
+}
+
+// --- Pixel access ---
+
+// SetPixel sets the color of a single pixel in screen coordinates.
+// Coordinates outside the canvas bounds are ignored.
+func (c *Canvas) SetPixel(x, y int, col color.RGBA) {
+	if !(image.Point{x, y}).In(c.dst.Bounds()) {
+		return
+	}
+	i := c.dst.PixOffset(x, y)
+	c.dst.Pix[i+0] = col.R
+	c.dst.Pix[i+1] = col.G
+	c.dst.Pix[i+2] = col.B
+	c.dst.Pix[i+3] = col.A
+}
+
+// GetPixel returns the color of a single pixel in screen coordinates.
+// Coordinates outside the canvas bounds return transparent black.
+func (c *Canvas) GetPixel(x, y int) color.RGBA {
+	if !(image.Point{x, y}).In(c.dst.Bounds()) {
+		return color.RGBA{}
+	}
+	i := c.dst.PixOffset(x, y)
+	return color.RGBA{
+		R: c.dst.Pix[i+0],
+		G: c.dst.Pix[i+1],
+		B: c.dst.Pix[i+2],
+		A: c.dst.Pix[i+3],
+	}
 }
 
 // --- Image access ---

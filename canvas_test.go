@@ -448,3 +448,70 @@ func TestGlobalAlpha(t *testing.T) {
 		t.Errorf("global alpha pixel = %v, expected blended red-on-white", got)
 	}
 }
+
+func TestFillRoundRect(t *testing.T) {
+	c := New(100, 100)
+	c.SetFillColor(RGB(255, 0, 0))
+	c.FillRoundRect(10, 10, 80, 80, 15)
+
+	// Center should be filled red.
+	got := c.Image().RGBAAt(50, 50)
+	if got.R != 255 || got.G != 0 || got.B != 0 {
+		t.Errorf("FillRoundRect center = %v, want red", got)
+	}
+
+	// Corner (10,10) should NOT be filled since it's in the rounded corner area.
+	got = c.Image().RGBAAt(10, 10)
+	if got.R == 255 && got.G == 0 && got.B == 0 {
+		t.Errorf("FillRoundRect corner (10,10) = %v, should not be fully red (rounded corner)", got)
+	}
+
+	// Pixel well outside should be white.
+	got = c.Image().RGBAAt(2, 2)
+	if got != (color.RGBA{255, 255, 255, 255}) {
+		t.Errorf("FillRoundRect exterior = %v, want white", got)
+	}
+}
+
+func TestStrokeRoundRect(t *testing.T) {
+	c := New(100, 100)
+	c.SetStrokeColor(RGB(0, 0, 255))
+	c.SetLineWidth(2)
+	c.StrokeRoundRect(10, 10, 80, 80, 15)
+
+	// A pixel on the top edge (middle) should be blue.
+	got := c.Image().RGBAAt(50, 10)
+	if got.B == 0 {
+		t.Error("StrokeRoundRect top edge should have blue component")
+	}
+
+	// Interior center should be white (not filled).
+	got = c.Image().RGBAAt(50, 50)
+	if got != (color.RGBA{255, 255, 255, 255}) {
+		t.Errorf("StrokeRoundRect interior = %v, want white", got)
+	}
+}
+
+func TestFillRoundRectZeroRadius(t *testing.T) {
+	c := New(40, 40)
+	c.SetFillColor(RGB(0, 255, 0))
+	c.FillRoundRect(5, 5, 30, 30, 0)
+
+	got := c.Image().RGBAAt(6, 6)
+	if got.G != 255 {
+		t.Errorf("FillRoundRect(r=0) corner = %v, want green", got)
+	}
+}
+
+func TestCanvasRoundRectPath(t *testing.T) {
+	c := New(100, 100)
+	c.SetFillColor(RGB(255, 0, 0))
+	c.BeginPath()
+	c.RoundRect(10, 10, 80, 80, 10)
+	c.Fill()
+
+	got := c.Image().RGBAAt(50, 50)
+	if got.R != 255 {
+		t.Errorf("RoundRect path fill center = %v, want red", got)
+	}
+}

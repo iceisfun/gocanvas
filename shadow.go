@@ -87,7 +87,7 @@ func compositeOver(dst, src *image.RGBA, offsetX, offsetY int, alpha float64) {
 			sg := uint32(src.Pix[sOff+1]) * sa / 255
 			sb := uint32(src.Pix[sOff+2]) * sa / 255
 
-			blendPixelPremul(dst, dx, dy, sr, sg, sb, sa)
+			blendPixelPremul(dst, dx, dy, sr, sg, sb, sa, CompSourceOver)
 		}
 	}
 }

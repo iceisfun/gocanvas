@@ -66,6 +66,36 @@ func (p *Path) Rect(x, y, w, h float64) {
 	p.Close()
 }
 
+// RoundRect adds a rounded rectangular sub-path. The radius is clamped
+// to min(w/2, h/2) so the arcs never exceed the rectangle dimensions.
+func (p *Path) RoundRect(x, y, w, h, radius float64) {
+	// Clamp radius.
+	maxR := math.Min(w/2, h/2)
+	if radius > maxR {
+		radius = maxR
+	}
+	if radius < 0 {
+		radius = 0
+	}
+
+	// If radius is zero, fall back to a plain rectangle.
+	if radius == 0 {
+		p.Rect(x, y, w, h)
+		return
+	}
+
+	// Build the rounded rect clockwise from the top-left arc.
+	p.Arc(x+radius, y+radius, radius, math.Pi, 3*math.Pi/2)
+	p.LineTo(x+w-radius, y)
+	p.Arc(x+w-radius, y+radius, radius, -math.Pi/2, 0)
+	p.LineTo(x+w, y+h-radius)
+	p.Arc(x+w-radius, y+h-radius, radius, 0, math.Pi/2)
+	p.LineTo(x+radius, y+h)
+	p.Arc(x+radius, y+h-radius, radius, math.Pi/2, math.Pi)
+	p.LineTo(x, y+radius)
+	p.Close()
+}
+
 // Circle adds a circular sub-path using cubic Bezier approximation.
 func (p *Path) Circle(cx, cy, r float64) {
 	p.Ellipse(cx, cy, r, r)
@@ -86,6 +116,116 @@ func (p *Path) Ellipse(cx, cy, rx, ry float64) {
 	p.CubicTo(cx-rx, cy-ky, cx-kx, cy-ry, cx, cy-ry)
 	p.CubicTo(cx+kx, cy-ry, cx+rx, cy-ky, cx+rx, cy)
 	p.Close()
+}
+
+// ArcTo adds an arc tangent to two lines. It draws a straight line from the
+// current point toward (x1, y1), then an arc of the given radius tangent to
+// the lines (current->p1) and (p1->p2), ending at the tangent point on the
+// second line. This matches the HTML5 Canvas arcTo specification.
+func (p *Path) ArcTo(x1, y1, x2, y2, radius float64) {
+	// Determine current point from the last op.
+	var p0x, p0y float64
+	hasPoint := false
+	for i := len(p.ops) - 1; i >= 0; i-- {
+		switch p.ops[i].op {
+		case opMoveTo, opLineTo:
+			p0x, p0y = p.ops[i].points[0].X, p.ops[i].points[0].Y
+			hasPoint = true
+		case opQuadTo:
+			p0x, p0y = p.ops[i].points[1].X, p.ops[i].points[1].Y
+			hasPoint = true
+		case opCubicTo:
+			p0x, p0y = p.ops[i].points[2].X, p.ops[i].points[2].Y
+			hasPoint = true
+		case opClose:
+			for j := i - 1; j >= 0; j-- {
+				if p.ops[j].op == opMoveTo {
+					p0x, p0y = p.ops[j].points[0].X, p.ops[j].points[0].Y
+					hasPoint = true
+					break
+				}
+			}
+		}
+		if hasPoint {
+			break
+		}
+	}
+	if !hasPoint {
+		p.MoveTo(x1, y1)
+		return
+	}
+
+	// Vectors from p1 to p0 and from p1 to p2.
+	v1x, v1y := p0x-x1, p0y-y1
+	v2x, v2y := x2-x1, y2-y1
+
+	len1 := math.Sqrt(v1x*v1x + v1y*v1y)
+	len2 := math.Sqrt(v2x*v2x + v2y*v2y)
+	if len1 < 1e-10 || len2 < 1e-10 {
+		p.LineTo(x1, y1)
+		return
+	}
+
+	v1x /= len1
+	v1y /= len1
+	v2x /= len2
+	v2y /= len2
+
+	cross := v1x*v2y - v1y*v2x
+	dot := v1x*v2x + v1y*v2y
+
+	if math.Abs(cross) < 1e-10 {
+		p.LineTo(x1, y1)
+		return
+	}
+
+	halfAngle := math.Acos(clampF(dot, -1, 1)) / 2
+	tanDist := radius / math.Tan(halfAngle)
+
+	tp1x := x1 + v1x*tanDist
+	tp1y := y1 + v1y*tanDist
+	tp2x := x1 + v2x*tanDist
+	tp2y := y1 + v2y*tanDist
+
+	centerDist := radius / math.Sin(halfAngle)
+
+	bx, by := v1x+v2x, v1y+v2y
+	blen := math.Sqrt(bx*bx + by*by)
+	if blen < 1e-10 {
+		p.LineTo(x1, y1)
+		return
+	}
+	bx /= blen
+	by /= blen
+
+	cx := x1 + bx*centerDist
+	cy := y1 + by*centerDist
+
+	startAngle := math.Atan2(tp1y-cy, tp1x-cx)
+	endAngle := math.Atan2(tp2y-cy, tp2x-cx)
+
+	if cross > 0 {
+		for endAngle > startAngle {
+			endAngle -= 2 * math.Pi
+		}
+	} else {
+		for endAngle < startAngle {
+			endAngle += 2 * math.Pi
+		}
+	}
+
+	p.LineTo(tp1x, tp1y)
+	p.EllipticArc(cx, cy, radius, radius, startAngle, endAngle)
+}
+
+func clampF(v, lo, hi float64) float64 {
+	if v < lo {
+		return lo
+	}
+	if v > hi {
+		return hi
+	}
+	return v
 }
 
 // Arc adds an arc to the path. Angles are in radians.

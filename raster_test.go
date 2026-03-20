@@ -31,7 +31,7 @@ func TestRasterizeFillRect(t *testing.T) {
 	}}
 	edges := buildEdges(rect)
 	red := color.RGBA{255, 0, 0, 255}
-	rasterizeFill(dst, edges, red)
+	rasterizeFill(dst, edges, red, CompSourceOver)
 
 	// Check a pixel inside the rect.
 	got := dst.RGBAAt(3, 3)
@@ -50,7 +50,7 @@ func TestBlendPixelFullAlpha(t *testing.T) {
 	dst := image.NewRGBA(image.Rect(0, 0, 1, 1))
 	dst.SetRGBA(0, 0, color.RGBA{100, 100, 100, 255})
 
-	blendPixel(dst, 0, 0, color.RGBA{255, 0, 0, 255})
+	blendPixel(dst, 0, 0, color.RGBA{255, 0, 0, 255}, CompSourceOver)
 	got := dst.RGBAAt(0, 0)
 	want := color.RGBA{255, 0, 0, 255}
 	if got != want {
@@ -63,7 +63,7 @@ func TestBlendPixelHalfAlpha(t *testing.T) {
 	dst.SetRGBA(0, 0, color.RGBA{0, 0, 0, 255})
 
 	// Blend 50% red onto black.
-	blendPixel(dst, 0, 0, color.RGBA{255, 0, 0, 128})
+	blendPixel(dst, 0, 0, color.RGBA{255, 0, 0, 128}, CompSourceOver)
 	got := dst.RGBAAt(0, 0)
 
 	// Expected: src premul = (128, 0, 0, 128)

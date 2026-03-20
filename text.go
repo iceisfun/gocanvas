@@ -43,14 +43,43 @@ func measureText(ff *FontFace, text string) TextMetrics {
 	}
 }
 
+// alignText adjusts the (x, y) position based on textAlign and textBaseline.
+func (c *Canvas) alignText(ff *FontFace, text string, x, y float64) (float64, float64) {
+	if c.state.textAlign != TextAlignLeft {
+		m := measureText(ff, text)
+		switch c.state.textAlign {
+		case TextAlignCenter:
+			x -= m.Width / 2
+		case TextAlignRight:
+			x -= m.Width
+		}
+	}
+
+	if c.state.textBaseline != TextBaselineAlphabetic {
+		ascent := ff.Ascent()
+		descent := ff.Descent()
+		switch c.state.textBaseline {
+		case TextBaselineTop:
+			y += ascent
+		case TextBaselineMiddle:
+			y += (ascent - descent) / 2
+		case TextBaselineBottom:
+			y -= descent
+		}
+	}
+
+	return x, y
+}
+
 // FillText renders text filled with the current fill color at the given position.
-// The position (x, y) specifies the text baseline origin.
+// The position (x, y) is adjusted by the current textAlign and textBaseline settings.
 func (c *Canvas) FillText(text string, x, y float64) {
 	ff := c.state.fontFace
 	if ff == nil {
 		return
 	}
 
+	x, y = c.alignText(ff, text, x, y)
 	fillColor := c.applyAlpha(c.state.fill)
 
 	if c.hasShadow() {
@@ -63,13 +92,14 @@ func (c *Canvas) FillText(text string, x, y float64) {
 }
 
 // StrokeText renders text outlined with the current stroke color at the given position.
-// The position (x, y) specifies the text baseline origin.
+// The position (x, y) is adjusted by the current textAlign and textBaseline settings.
 func (c *Canvas) StrokeText(text string, x, y float64) {
 	ff := c.state.fontFace
 	if ff == nil {
 		return
 	}
 
+	x, y = c.alignText(ff, text, x, y)
 	strokeColor := c.applyAlpha(c.state.stroke)
 
 	if c.hasShadow() {
@@ -90,7 +120,8 @@ func (c *Canvas) FitText(text string, maxWidth, maxHeight float64, f *Font, minS
 
 // FillTextFit finds the largest font size that fits the text within the
 // rectangle (x, y, w, h) and draws it filled with the current fill color.
-// The text is vertically centered within the box.
+// Horizontal placement within the box respects the current textAlign setting.
+// Vertical placement within the box respects the current textBaseline setting.
 func (c *Canvas) FillTextFit(text string, x, y, w, h float64, f *Font) error {
 	face, err := fitText(text, w, h, f, 1, h*2)
 	if err != nil {
@@ -98,8 +129,30 @@ func (c *Canvas) FillTextFit(text string, x, y, w, h float64, f *Font) error {
 	}
 
 	m := measureText(face, text)
-	tx := x
-	ty := y + (h-m.Height)/2 + m.Ascent
+
+	// Compute tx so alignment places the text within the box.
+	var tx float64
+	switch c.state.textAlign {
+	case TextAlignCenter:
+		tx = x + w/2
+	case TextAlignRight:
+		tx = x + w
+	default:
+		tx = x
+	}
+
+	// Compute ty so baseline places the text vertically centered in the box.
+	var ty float64
+	switch c.state.textBaseline {
+	case TextBaselineTop:
+		ty = y + (h-m.Height)/2
+	case TextBaselineMiddle:
+		ty = y + h/2
+	case TextBaselineBottom:
+		ty = y + (h+m.Height)/2
+	default: // Alphabetic
+		ty = y + (h-m.Height)/2 + m.Ascent
+	}
 
 	c.SetFont(face)
 	c.FillText(text, tx, ty)
@@ -287,5 +340,5 @@ func blendGlyphPixel(dst *image.RGBA, x, y int, col color.RGBA, coverage uint8) 
 	sr := uint32(col.R) * sa / 255
 	sg := uint32(col.G) * sa / 255
 	sb := uint32(col.B) * sa / 255
-	blendPixelPremul(dst, x, y, sr, sg, sb, sa)
+	blendPixelPremul(dst, x, y, sr, sg, sb, sa, CompSourceOver)
 }

@@ -98,7 +98,7 @@ func drawImageTransformed(dst *image.RGBA, img image.Image, sx, sy, sw, sh, dx, 
 				sb = uint32(float64(sb) * alpha)
 			}
 
-			blendPixelPremul(dst, px, py, sr, sg, sb, sa)
+			blendPixelPremul(dst, px, py, sr, sg, sb, sa, CompSourceOver)
 		}
 	}
 }
@@ -137,7 +137,7 @@ func drawImageRGBA(dst, src *image.RGBA, sx, sy, sw, sh, dx, dy, dw, dh, alpha f
 				sb = uint32(float64(sb) * alpha)
 			}
 
-			blendPixelPremul(dst, px, py, sr, sg, sb, sa)
+			blendPixelPremul(dst, px, py, sr, sg, sb, sa, CompSourceOver)
 		}
 	}
 }

@@ -54,8 +54,12 @@ func buildEdges(subPaths [][]Point) []edge {
 	return edges
 }
 
-// rasterizeFill fills edges onto the destination image using non-zero winding rule.
-func rasterizeFill(dst *image.RGBA, edges []edge, fill color.RGBA) {
+// aaSamples is the number of vertical sub-pixel samples used for anti-aliasing.
+const aaSamples = 8
+
+// rasterizeFill fills edges onto the destination image using non-zero winding rule
+// with anti-aliased edges.
+func rasterizeFill(dst *image.RGBA, edges []edge, fill color.RGBA, op CompositeOp) {
 	if len(edges) == 0 {
 		return
 	}
@@ -83,52 +87,134 @@ func rasterizeFill(dst *image.RGBA, edges []edge, fill color.RGBA) {
 		endY = bounds.Max.Y
 	}
 
+	// Find x range for coverage buffer sizing.
+	xMinF := math.Inf(1)
+	xMaxF := math.Inf(-1)
+	for _, e := range edges {
+		if e.x0 < xMinF {
+			xMinF = e.x0
+		}
+		if e.x1 < xMinF {
+			xMinF = e.x1
+		}
+		if e.x0 > xMaxF {
+			xMaxF = e.x0
+		}
+		if e.x1 > xMaxF {
+			xMaxF = e.x1
+		}
+	}
+	xMinPx := int(math.Floor(xMinF)) - 1
+	xMaxPx := int(math.Ceil(xMaxF)) + 1
+	if xMinPx < bounds.Min.X {
+		xMinPx = bounds.Min.X
+	}
+	if xMaxPx > bounds.Max.X {
+		xMaxPx = bounds.Max.X
+	}
+
+	covLen := xMaxPx - xMinPx
+	if covLen <= 0 {
+		return
+	}
+	coverage := make([]uint32, covLen)
+
 	// Pre-compute premultiplied source color.
 	sa := uint32(fill.A)
 	sr := uint32(fill.R) * sa / 255
 	sg := uint32(fill.G) * sa / 255
 	sb := uint32(fill.B) * sa / 255
 
-	// Scanline rasterization.
+	// Sub-scanline offsets within a pixel row.
+	var subOffsets [aaSamples]float64
+	for i := range aaSamples {
+		subOffsets[i] = (float64(i) + 0.5) / float64(aaSamples)
+	}
+
 	var intercepts []edgeIntercept
 	for y := startY; y < endY; y++ {
-		scanY := float64(y) + 0.5 // sample at pixel center
-
-		// Find active edges and compute x-intercepts.
-		intercepts = intercepts[:0]
-		for i := range edges {
-			e := &edges[i]
-			if scanY < e.y0 || scanY >= e.y1 {
-				continue
-			}
-			// Linear interpolation for x at this y.
-			t := (scanY - e.y0) / (e.y1 - e.y0)
-			x := e.x0 + t*(e.x1-e.x0)
-			intercepts = append(intercepts, edgeIntercept{x: x, dir: e.dir})
+		for i := range coverage {
+			coverage[i] = 0
 		}
 
-		// Sort by x.
-		sort.Slice(intercepts, func(i, j int) bool {
-			return intercepts[i].x < intercepts[j].x
-		})
+		for _, subOff := range subOffsets {
+			scanY := float64(y) + subOff
 
-		// Walk intercepts with winding count.
-		winding := 0
-		for i := 0; i < len(intercepts)-1; i++ {
-			winding += intercepts[i].dir
-			if winding != 0 {
-				// Fill span from intercepts[i].x to intercepts[i+1].x.
-				xStart := int(math.Ceil(intercepts[i].x - 0.5))
-				xEnd := int(math.Ceil(intercepts[i+1].x - 0.5))
-				if xStart < bounds.Min.X {
-					xStart = bounds.Min.X
+			intercepts = intercepts[:0]
+			for i := range edges {
+				e := &edges[i]
+				if scanY < e.y0 || scanY >= e.y1 {
+					continue
 				}
-				if xEnd > bounds.Max.X {
-					xEnd = bounds.Max.X
+				t := (scanY - e.y0) / (e.y1 - e.y0)
+				x := e.x0 + t*(e.x1-e.x0)
+				intercepts = append(intercepts, edgeIntercept{x: x, dir: e.dir})
+			}
+
+			sort.Slice(intercepts, func(i, j int) bool {
+				return intercepts[i].x < intercepts[j].x
+			})
+
+			winding := 0
+			for i := 0; i < len(intercepts)-1; i++ {
+				winding += intercepts[i].dir
+				if winding != 0 {
+					leftX := intercepts[i].x
+					rightX := intercepts[i+1].x
+
+					pxLeft := int(math.Floor(leftX))
+					pxRight := int(math.Floor(rightX))
+
+					if pxLeft < xMinPx {
+						pxLeft = xMinPx
+					}
+					if pxRight >= xMaxPx {
+						pxRight = xMaxPx - 1
+					}
+
+					for px := pxLeft; px <= pxRight; px++ {
+						cLeft := float64(px)
+						cRight := float64(px + 1)
+
+						spanLeft := leftX
+						if spanLeft < cLeft {
+							spanLeft = cLeft
+						}
+						spanRight := rightX
+						if spanRight > cRight {
+							spanRight = cRight
+						}
+
+						if spanRight > spanLeft {
+							frac := spanRight - spanLeft
+							coverage[px-xMinPx] += uint32(frac * 256)
+						}
+					}
 				}
-				for x := xStart; x < xEnd; x++ {
-					blendPixelPremul(dst, x, y, sr, sg, sb, sa)
-				}
+			}
+		}
+
+		// Emit pixels with accumulated coverage.
+		maxCov := uint32(aaSamples * 256)
+		for i := range coverage {
+			if coverage[i] == 0 {
+				continue
+			}
+
+			px := i + xMinPx
+			if px < bounds.Min.X || px >= bounds.Max.X {
+				continue
+			}
+
+			cov := coverage[i]
+			if cov >= maxCov {
+				blendPixelPremul(dst, px, y, sr, sg, sb, sa, op)
+			} else {
+				covAlpha := sa * cov / maxCov
+				covR := sr * cov / maxCov
+				covG := sg * cov / maxCov
+				covB := sb * cov / maxCov
+				blendPixelPremul(dst, px, y, covR, covG, covB, covAlpha, op)
 			}
 		}
 	}
@@ -139,43 +225,207 @@ type edgeIntercept struct {
 	dir int
 }
 
-// blendPixelPremul performs source-over compositing with premultiplied source.
-func blendPixelPremul(dst *image.RGBA, x, y int, sr, sg, sb, sa uint32) {
+// blendPixelPremul composites a premultiplied source pixel onto the destination
+// using the specified composite operation.
+func blendPixelPremul(dst *image.RGBA, x, y int, sr, sg, sb, sa uint32, op CompositeOp) {
 	off := dst.PixOffset(x, y)
 	if off < 0 || off+3 >= len(dst.Pix) {
 		return
 	}
 
-	if sa == 255 {
-		dst.Pix[off+0] = uint8(sr)
-		dst.Pix[off+1] = uint8(sg)
-		dst.Pix[off+2] = uint8(sb)
-		dst.Pix[off+3] = 255
-		return
-	}
-	if sa == 0 {
-		return
+	// Fast path for source-over with full/zero alpha.
+	if op == CompSourceOver {
+		if sa == 255 {
+			dst.Pix[off+0] = uint8(sr)
+			dst.Pix[off+1] = uint8(sg)
+			dst.Pix[off+2] = uint8(sb)
+			dst.Pix[off+3] = 255
+			return
+		}
+		if sa == 0 {
+			return
+		}
 	}
 
-	invA := 255 - sa
 	dr := uint32(dst.Pix[off+0])
 	dg := uint32(dst.Pix[off+1])
 	db := uint32(dst.Pix[off+2])
 	da := uint32(dst.Pix[off+3])
 
-	dst.Pix[off+0] = uint8((sr*255 + dr*invA) / 255)
-	dst.Pix[off+1] = uint8((sg*255 + dg*invA) / 255)
-	dst.Pix[off+2] = uint8((sb*255 + db*invA) / 255)
-	dst.Pix[off+3] = uint8((sa*255 + da*invA) / 255)
+	var outR, outG, outB, outA uint32
+
+	switch op {
+	case CompSourceOver:
+		invA := 255 - sa
+		outR = (sr*255 + dr*invA) / 255
+		outG = (sg*255 + dg*invA) / 255
+		outB = (sb*255 + db*invA) / 255
+		outA = (sa*255 + da*invA) / 255
+
+	case CompDestinationOver:
+		invA := 255 - da
+		outR = (dr*255 + sr*invA) / 255
+		outG = (dg*255 + sg*invA) / 255
+		outB = (db*255 + sb*invA) / 255
+		outA = (da*255 + sa*invA) / 255
+
+	case CompSourceIn:
+		outR = sr * da / 255
+		outG = sg * da / 255
+		outB = sb * da / 255
+		outA = sa * da / 255
+
+	case CompDestinationIn:
+		outR = dr * sa / 255
+		outG = dg * sa / 255
+		outB = db * sa / 255
+		outA = da * sa / 255
+
+	case CompSourceOut:
+		invDA := 255 - da
+		outR = sr * invDA / 255
+		outG = sg * invDA / 255
+		outB = sb * invDA / 255
+		outA = sa * invDA / 255
+
+	case CompDestinationOut:
+		invSA := 255 - sa
+		outR = dr * invSA / 255
+		outG = dg * invSA / 255
+		outB = db * invSA / 255
+		outA = da * invSA / 255
+
+	case CompLighter:
+		outR = sr + dr
+		if outR > 255 {
+			outR = 255
+		}
+		outG = sg + dg
+		if outG > 255 {
+			outG = 255
+		}
+		outB = sb + db
+		if outB > 255 {
+			outB = 255
+		}
+		outA = sa + da
+		if outA > 255 {
+			outA = 255
+		}
+
+	case CompCopy:
+		outR = sr
+		outG = sg
+		outB = sb
+		outA = sa
+
+	case CompXOR:
+		invDA := 255 - da
+		invSA := 255 - sa
+		outR = (sr*invDA + dr*invSA) / 255
+		outG = (sg*invDA + dg*invSA) / 255
+		outB = (sb*invDA + db*invSA) / 255
+		outA = (sa*invDA + da*invSA) / 255
+
+	case CompMultiply:
+		outR = sr * dr / 255
+		outG = sg * dg / 255
+		outB = sb * db / 255
+		invA := 255 - sa
+		outA = (sa*255 + da*invA) / 255
+
+	case CompScreen:
+		outR = sr + dr - sr*dr/255
+		outG = sg + dg - sg*dg/255
+		outB = sb + db - sb*db/255
+		invA := 255 - sa
+		outA = (sa*255 + da*invA) / 255
+
+	default:
+		invA := 255 - sa
+		outR = (sr*255 + dr*invA) / 255
+		outG = (sg*255 + dg*invA) / 255
+		outB = (sb*255 + db*invA) / 255
+		outA = (sa*255 + da*invA) / 255
+	}
+
+	dst.Pix[off+0] = uint8(outR)
+	dst.Pix[off+1] = uint8(outG)
+	dst.Pix[off+2] = uint8(outB)
+	dst.Pix[off+3] = uint8(outA)
+}
+
+// rasterizeMask produces an alpha mask from edges using non-zero winding rule.
+func rasterizeMask(width, height int, edges []edge) *image.Alpha {
+	mask := image.NewAlpha(image.Rect(0, 0, width, height))
+	if len(edges) == 0 {
+		return mask
+	}
+
+	yMin := math.Inf(1)
+	yMax := math.Inf(-1)
+	for _, e := range edges {
+		if e.y0 < yMin {
+			yMin = e.y0
+		}
+		if e.y1 > yMax {
+			yMax = e.y1
+		}
+	}
+
+	startY := int(math.Floor(yMin))
+	endY := int(math.Ceil(yMax))
+	if startY < 0 {
+		startY = 0
+	}
+	if endY > height {
+		endY = height
+	}
+
+	var intercepts []edgeIntercept
+	for y := startY; y < endY; y++ {
+		scanY := float64(y) + 0.5
+		intercepts = intercepts[:0]
+		for i := range edges {
+			e := &edges[i]
+			if scanY < e.y0 || scanY >= e.y1 {
+				continue
+			}
+			t := (scanY - e.y0) / (e.y1 - e.y0)
+			x := e.x0 + t*(e.x1-e.x0)
+			intercepts = append(intercepts, edgeIntercept{x: x, dir: e.dir})
+		}
+		sort.Slice(intercepts, func(i, j int) bool {
+			return intercepts[i].x < intercepts[j].x
+		})
+		winding := 0
+		for i := 0; i < len(intercepts)-1; i++ {
+			winding += intercepts[i].dir
+			if winding != 0 {
+				xStart := int(math.Ceil(intercepts[i].x - 0.5))
+				xEnd := int(math.Ceil(intercepts[i+1].x - 0.5))
+				if xStart < 0 {
+					xStart = 0
+				}
+				if xEnd > width {
+					xEnd = width
+				}
+				for x := xStart; x < xEnd; x++ {
+					mask.Pix[y*mask.Stride+x] = 255
+				}
+			}
+		}
+	}
+	return mask
 }
 
 // blendPixel blends a single non-premultiplied color onto the destination.
-func blendPixel(dst *image.RGBA, x, y int, src color.RGBA) {
+func blendPixel(dst *image.RGBA, x, y int, src color.RGBA, op CompositeOp) {
 	sa := uint32(src.A)
 	sr := uint32(src.R) * sa / 255
 	sg := uint32(src.G) * sa / 255
 	sb := uint32(src.B) * sa / 255
-	blendPixelPremul(dst, x, y, sr, sg, sb, sa)
+	blendPixelPremul(dst, x, y, sr, sg, sb, sa, op)
 }
 
 // strokePath converts a stroked polyline into a filled polygon outline.
@@ -231,7 +481,6 @@ func strokePath(subPaths [][]Point, width float64, cap LineCap, join LineJoin, m
 		if closed {
 			// Join last segment to first.
 			if len(sp) >= 3 {
-				// Recompute first segment perpendicular.
 				p0 := sp[0]
 				p1 := sp[1]
 				dx := p1.X - p0.X
@@ -259,7 +508,6 @@ func strokePath(subPaths [][]Point, width float64, cap LineCap, join LineJoin, m
 		for i := len(right) - 1; i >= 0; i-- {
 			outline = append(outline, right[i])
 		}
-		// Close the outline.
 		if len(outline) > 0 {
 			outline = append(outline, outline[0])
 		}
@@ -276,7 +524,6 @@ func addJoin(pts *[]Point, next Point, join LineJoin, miterLimit, halfW float64,
 	case JoinBevel:
 		*pts = append(*pts, next)
 	case JoinRound:
-		// Approximate with a fan of line segments.
 		if len(*pts) == 0 {
 			*pts = append(*pts, next)
 			return
@@ -290,7 +537,6 @@ func addJoin(pts *[]Point, next Point, join LineJoin, miterLimit, halfW float64,
 		}
 		last := (*pts)[len(*pts)-1]
 
-		// Check miter length.
 		mx := (last.X + next.X) / 2
 		my := (last.Y + next.Y) / 2
 		dx := mx - curr.X
@@ -298,10 +544,8 @@ func addJoin(pts *[]Point, next Point, join LineJoin, miterLimit, halfW float64,
 		miterLen := math.Sqrt(dx*dx + dy*dy)
 
 		if miterLen > miterLimit*halfW {
-			// Fall back to bevel.
 			*pts = append(*pts, next)
 		} else {
-			// Compute intersection of the two offset lines.
 			ix, iy, ok := lineIntersection(
 				(*pts)[len(*pts)-2], last,
 				next, Point{next.X + (nextSeg.X - curr.X), next.Y + (nextSeg.Y - curr.Y)},
@@ -367,7 +611,6 @@ func addCap(pts []Point, endpoint, adjacent Point, cap LineCap, halfW float64, _
 	case CapButt:
 		// No extra geometry needed.
 	case CapSquare:
-		// Extend the endpoint by halfW in the direction of the line.
 		ext := Point{endpoint.X + dx*halfW, endpoint.Y + dy*halfW}
 		nx := -dy * halfW
 		ny := dx * halfW
@@ -376,7 +619,6 @@ func addCap(pts []Point, endpoint, adjacent Point, cap LineCap, halfW float64, _
 			Point{ext.X - nx, ext.Y - ny},
 		)
 	case CapRound:
-		// Semicircle at endpoint.
 		nx := -dy * halfW
 		ny := dx * halfW
 		center := endpoint
@@ -397,6 +639,82 @@ func addCap(pts []Point, endpoint, adjacent Point, cap LineCap, halfW float64, _
 	}
 
 	return pts
+}
+
+// rasterizeGradientFill fills edges using a gradient for color sampling.
+func rasterizeGradientFill(dst *image.RGBA, edges []edge, grad Gradient, inv Matrix, alpha float64, op CompositeOp) {
+	if len(edges) == 0 {
+		return
+	}
+
+	bounds := dst.Bounds()
+
+	yMin := math.Inf(1)
+	yMax := math.Inf(-1)
+	for _, e := range edges {
+		if e.y0 < yMin {
+			yMin = e.y0
+		}
+		if e.y1 > yMax {
+			yMax = e.y1
+		}
+	}
+
+	startY := int(math.Floor(yMin))
+	endY := int(math.Ceil(yMax))
+	if startY < bounds.Min.Y {
+		startY = bounds.Min.Y
+	}
+	if endY > bounds.Max.Y {
+		endY = bounds.Max.Y
+	}
+
+	var intercepts []edgeIntercept
+	for y := startY; y < endY; y++ {
+		scanY := float64(y) + 0.5
+
+		intercepts = intercepts[:0]
+		for i := range edges {
+			e := &edges[i]
+			if scanY < e.y0 || scanY >= e.y1 {
+				continue
+			}
+			t := (scanY - e.y0) / (e.y1 - e.y0)
+			x := e.x0 + t*(e.x1-e.x0)
+			intercepts = append(intercepts, edgeIntercept{x: x, dir: e.dir})
+		}
+
+		sort.Slice(intercepts, func(i, j int) bool {
+			return intercepts[i].x < intercepts[j].x
+		})
+
+		winding := 0
+		for i := 0; i < len(intercepts)-1; i++ {
+			winding += intercepts[i].dir
+			if winding != 0 {
+				xStart := int(math.Ceil(intercepts[i].x - 0.5))
+				xEnd := int(math.Ceil(intercepts[i+1].x - 0.5))
+				if xStart < bounds.Min.X {
+					xStart = bounds.Min.X
+				}
+				if xEnd > bounds.Max.X {
+					xEnd = bounds.Max.X
+				}
+				for x := xStart; x < xEnd; x++ {
+					gx, gy := inv.TransformPoint(float64(x)+0.5, float64(y)+0.5)
+					col := grad.ColorAt(gx, gy)
+					if alpha < 1.0 {
+						col.A = uint8(float64(col.A) * alpha)
+					}
+					sa := uint32(col.A)
+					sr := uint32(col.R) * sa / 255
+					sg := uint32(col.G) * sa / 255
+					sb := uint32(col.B) * sa / 255
+					blendPixelPremul(dst, x, y, sr, sg, sb, sa, op)
+				}
+			}
+		}
+	}
 }
 
 // transformSubPaths transforms all points in sub-paths by the given matrix.
