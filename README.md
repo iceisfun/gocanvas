@@ -88,6 +88,28 @@ c.Transform(gocanvas.Matrix{a, b, tx, c, d, ty}) // multiply into current
 c.ResetTransform()
 ```
 
+## Text
+
+```go
+font, _ := gocanvas.LoadFontFile("DejaVuSans-Bold.ttf")
+
+// Set font and draw
+face, _ := font.NewFace(24)
+c.SetFont(face)
+c.FillText("hello", 10, 50)
+
+// Measure text metrics
+m := c.MeasureText("hello")
+fmt.Println(m.Width, m.Height)
+
+// Auto-fit: find the largest size that fits within a box
+fitted, _ := c.FitText("hello", 200, 40, font, 1, 100)
+c.SetFont(fitted)
+
+// Or fit and draw in one call (vertically centered)
+c.FillTextFit("hello", 10, 10, 200, 40, font)
+```
+
 ## Annotations
 
 ```go

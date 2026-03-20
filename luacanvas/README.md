@@ -85,6 +85,10 @@ All methods use `:` syntax (e.g. `c:fill_rect(0, 0, 100, 50)`).
 | `c:set_line_width(w)` | Set stroke line width. |
 | `c:set_global_alpha(a)` | Set global opacity (0.0-1.0). |
 | `c:set_stroke_mode(mode)` | `"screen"` (constant width) or `"world"` (scales with transform). |
+| `c:set_line_dash(pattern)` | Set dash pattern, e.g. `{15, 8}`. Pass `{}` or `nil` for solid. |
+| `c:set_line_dash_offset(offset)` | Set the dash pattern offset. |
+| `c:set_shadow(opts)` | Set shadow: `{color={r,g,b,a}, blur=N, offset_x=N, offset_y=N}`. |
+| `c:clear_shadow()` | Remove shadow. |
 
 #### Shapes
 
@@ -128,6 +132,8 @@ All methods use `:` syntax (e.g. `c:fill_rect(0, 0, 100, 50)`).
 | `c:fill_text(text, x, y)` | Draw filled text at the baseline origin. |
 | `c:stroke_text(text, x, y)` | Draw outlined text. |
 | `c:measure_text(text [, opts])` | Returns `{width, height, ascent, descent}`. |
+| `c:fit_text(text, w, h, font [, min, max])` | Find largest size that fits. Returns `{width, height, ascent, descent, font_size}`. |
+| `c:fill_text_fit(text, x, y, w, h, font)` | Auto-fit and draw text centered in a box. |
 
 `measure_text` accepts an optional table `{font=, font_size=}` to measure
 without changing the canvas state:
@@ -135,6 +141,16 @@ without changing the canvas state:
 ```lua
 local m = c:measure_text("hello", {font = font, font_size = 24})
 print(m.width, m.height)
+```
+
+`fit_text` binary-searches for the largest font size that fits within
+`w x h`, sets the canvas font to the result, and returns metrics:
+
+```lua
+local m = c:fit_text("Hello World", 300, 50, font)
+print(m.font_size, m.width, m.height)
+-- font is now set, so fill_text uses the fitted size
+c:fill_text("Hello World", x, y + m.ascent)
 ```
 
 #### Images
@@ -183,3 +199,5 @@ See the [`examples/`](../examples/) directory:
 - **drawimage.lua** - Loading images, sub-rects, scaling, alpha.
 - **transform.lua** - Rotate, scale, and combined transforms.
 - **bb.lua** - ML-style bounding box annotations with labels.
+- **concave.lua** - Concave polygon fill and stroke.
+- **dashed.lua** - Dash patterns, dot-dash lines, and glowing dashed strokes.

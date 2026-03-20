@@ -144,6 +144,53 @@ func (b *Bindings) canvasToLua(c *gocanvas.Canvas) *vm.Table {
 		c.SetGlobalAlpha(v.Get(2).AsFloat())
 		return 0
 	}))
+	t.SetString("set_line_dash", vm.NewNativeFunc(func(v *vm.VM) int {
+		pat := v.Get(2)
+		if pat.IsNil() || (pat.IsTable() && pat.AsTable().Len() == 0) {
+			c.SetLineDash(nil)
+			return 0
+		}
+		if !pat.IsTable() {
+			panic(&vm.LuaError{Value: vm.NewString("set_line_dash: expected table or nil")})
+		}
+		tbl := pat.AsTable()
+		n := tbl.Len()
+		dash := make([]float64, n)
+		for i := range n {
+			dash[i] = tbl.Get(vm.NewInt(int64(i + 1))).AsFloat()
+		}
+		c.SetLineDash(dash)
+		return 0
+	}))
+	t.SetString("set_line_dash_offset", vm.NewNativeFunc(func(v *vm.VM) int {
+		c.SetLineDashOffset(v.Get(2).AsFloat())
+		return 0
+	}))
+	t.SetString("set_shadow", vm.NewNativeFunc(func(v *vm.VM) int {
+		opts := v.Get(2)
+		if !opts.IsTable() {
+			panic(&vm.LuaError{Value: vm.NewString("set_shadow: expected table")})
+		}
+		tbl := opts.AsTable()
+		if col := tbl.Get(vm.NewString("color")); col.IsTable() {
+			c.SetShadowColor(colorFromTable(col.AsTable()))
+		}
+		if blur := tbl.Get(vm.NewString("blur")); blur.IsNumber() {
+			c.SetShadowBlur(blur.AsFloat())
+		}
+		if ox := tbl.Get(vm.NewString("offset_x")); ox.IsNumber() {
+			if oy := tbl.Get(vm.NewString("offset_y")); oy.IsNumber() {
+				c.SetShadowOffset(ox.AsFloat(), oy.AsFloat())
+			}
+		}
+		return 0
+	}))
+	t.SetString("clear_shadow", vm.NewNativeFunc(func(v *vm.VM) int {
+		c.SetShadowColor(color.RGBA{})
+		c.SetShadowBlur(0)
+		c.SetShadowOffset(0, 0)
+		return 0
+	}))
 
 	// Rectangles.
 	t.SetString("fill_rect", vm.NewNativeFunc(func(v *vm.VM) int {
@@ -347,6 +394,79 @@ func (b *Bindings) canvasToLua(c *gocanvas.Canvas) *vm.Table {
 		result.SetString("descent", vm.NewFloat(m.Descent))
 		v.Set(0, vm.NewTable(result))
 		return 1
+	}))
+
+	// fit_text(text, w, h, font [, min_size, max_size])
+	// Returns {width, height, ascent, descent, font_size} for the best fit.
+	t.SetString("fit_text", vm.NewNativeFunc(func(v *vm.VM) int {
+		text := v.Get(2)
+		if !text.IsString() {
+			panic(&vm.LuaError{Value: vm.NewString("fit_text: first argument must be a string")})
+		}
+		w := v.Get(3).AsFloat()
+		h := v.Get(4).AsFloat()
+
+		fontTbl := v.Get(5)
+		if !fontTbl.IsTable() {
+			panic(&vm.LuaError{Value: vm.NewString("fit_text: fourth argument must be a font table")})
+		}
+		fontID := fontTbl.AsTable().Get(vm.NewString("_id")).AsInt()
+		f := b.fonts[fontID]
+		if f == nil {
+			panic(&vm.LuaError{Value: vm.NewString("fit_text: invalid font reference")})
+		}
+
+		minSize := 1.0
+		maxSize := h * 2
+		if arg := v.Get(6); arg.IsNumber() {
+			minSize = arg.AsFloat()
+		}
+		if arg := v.Get(7); arg.IsNumber() {
+			maxSize = arg.AsFloat()
+		}
+
+		face, err := c.FitText(text.AsString(), w, h, f, minSize, maxSize)
+		if err != nil {
+			panic(&vm.LuaError{Value: vm.NewString(fmt.Sprintf("fit_text: %s", err))})
+		}
+
+		c.SetFont(face)
+		m := c.MeasureText(text.AsString())
+
+		result := vm.NewEmptyTable()
+		result.SetString("width", vm.NewFloat(m.Width))
+		result.SetString("height", vm.NewFloat(m.Height))
+		result.SetString("ascent", vm.NewFloat(m.Ascent))
+		result.SetString("descent", vm.NewFloat(m.Descent))
+		result.SetString("font_size", vm.NewFloat(face.Size()))
+		v.Set(0, vm.NewTable(result))
+		return 1
+	}))
+	// fill_text_fit(text, x, y, w, h, font)
+	// Finds the largest font size that fits and draws centered in the box.
+	t.SetString("fill_text_fit", vm.NewNativeFunc(func(v *vm.VM) int {
+		text := v.Get(2)
+		if !text.IsString() {
+			panic(&vm.LuaError{Value: vm.NewString("fill_text_fit: first argument must be a string")})
+		}
+
+		fontTbl := v.Get(7)
+		if !fontTbl.IsTable() {
+			panic(&vm.LuaError{Value: vm.NewString("fill_text_fit: sixth argument must be a font table")})
+		}
+		fontID := fontTbl.AsTable().Get(vm.NewString("_id")).AsInt()
+		f := b.fonts[fontID]
+		if f == nil {
+			panic(&vm.LuaError{Value: vm.NewString("fill_text_fit: invalid font reference")})
+		}
+
+		err := c.FillTextFit(text.AsString(),
+			v.Get(3).AsFloat(), v.Get(4).AsFloat(),
+			v.Get(5).AsFloat(), v.Get(6).AsFloat(), f)
+		if err != nil {
+			panic(&vm.LuaError{Value: vm.NewString(fmt.Sprintf("fill_text_fit: %s", err))})
+		}
+		return 0
 	}))
 
 	// Annotations.
