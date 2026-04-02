@@ -295,3 +295,59 @@ func TestLerpColor(t *testing.T) {
 		t.Fatalf("lerp at 0.5 unexpected: %v", c)
 	}
 }
+
+func TestConicGradientBasic(t *testing.T) {
+	g := NewConicGradient(50, 50, 0)
+	g.AddColorStop(0, color.RGBA{255, 0, 0, 255})
+	g.AddColorStop(1, color.RGBA{0, 0, 255, 255})
+
+	// Left side (angle = π → t = 1.0) should be blue.
+	c0 := g.ColorAt(0, 50)
+	if c0.B < 240 {
+		t.Fatalf("expected blue at left (t=1), got %v", c0)
+	}
+
+	// Right side (angle = 0 → t = 0.5) should be midpoint.
+	cm := g.ColorAt(100, 50)
+	if cm.R < 100 || cm.R > 150 || cm.B < 100 || cm.B > 150 {
+		t.Fatalf("expected mid-range at right, got %v", cm)
+	}
+}
+
+func TestConicGradientRotation(t *testing.T) {
+	g := NewConicGradient(50, 50, 180)
+	g.AddColorStop(0, color.RGBA{255, 0, 0, 255})
+	g.AddColorStop(1, color.RGBA{0, 0, 255, 255})
+
+	// With 180 deg rotation, the right side (angle 0 → base t=0.5)
+	// becomes t=0.5-0.5=0.0 → red.
+	c0 := g.ColorAt(100, 50)
+	if c0.R < 240 {
+		t.Fatalf("expected red at right with 180 rotation, got %v", c0)
+	}
+
+	// Left side (angle π → base t=1.0) becomes t=1.0-0.5=0.5 → midpoint.
+	cm := g.ColorAt(0, 50)
+	if cm.R < 100 || cm.R > 150 || cm.B < 100 || cm.B > 150 {
+		t.Fatalf("expected midpoint at left with 180 rotation, got %v", cm)
+	}
+}
+
+func TestConicGradientMultipleStops(t *testing.T) {
+	g := NewConicGradient(50, 50, 0)
+	g.AddColorStop(0, color.RGBA{255, 0, 0, 255})
+	g.AddColorStop(0.5, color.RGBA{0, 255, 0, 255})
+	g.AddColorStop(1, color.RGBA{0, 0, 255, 255})
+
+	// Top (angle ≈ -π/2 → t ≈ 0.25) should be red-green mix.
+	ct := g.ColorAt(50, 0)
+	if ct.R < 100 || ct.G < 100 || ct.B > 20 {
+		t.Fatalf("expected red+green mix at top, got %v", ct)
+	}
+
+	// Bottom (angle ≈ π/2 → t ≈ 0.75) should be green-blue mix.
+	cb := g.ColorAt(50, 100)
+	if cb.G < 100 || cb.B < 100 || cb.R > 20 {
+		t.Fatalf("expected green+blue mix at bottom, got %v", cb)
+	}
+}

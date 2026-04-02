@@ -31,7 +31,7 @@ func TestRasterizeFillRect(t *testing.T) {
 	}}
 	edges := buildEdges(rect)
 	red := color.RGBA{255, 0, 0, 255}
-	rasterizeFill(dst, edges, red, CompSourceOver)
+	rasterizeFill(dst, edges, red, CompSourceOver, FillRuleWinding)
 
 	// Check a pixel inside the rect.
 	got := dst.RGBAAt(3, 3)
@@ -75,6 +75,60 @@ func TestBlendPixelHalfAlpha(t *testing.T) {
 	}
 	if got.A != 255 {
 		t.Errorf("blendPixel half alpha: A = %d, want 255", got.A)
+	}
+}
+
+func TestEvenOddFillRule(t *testing.T) {
+	// Two concentric rectangles drawn in the same winding direction.
+	// With even-odd rule, the inner rect should create a hole.
+	c := New(50, 50)
+	c.SetFillColor(color.RGBA{255, 0, 0, 255})
+	c.SetFillRule(FillRuleEvenOdd)
+
+	c.BeginPath()
+	// Outer rect: 5,5 to 45,45
+	c.Rect(5, 5, 40, 40)
+	// Inner rect: 15,15 to 35,35
+	c.Rect(15, 15, 20, 20)
+	c.Fill()
+
+	// Center pixel (25,25) should NOT be filled (hole) — should be white.
+	center := c.GetPixel(25, 25)
+	if center.R != 255 || center.G != 255 || center.B != 255 {
+		t.Errorf("EvenOdd center pixel = %v, want white (hole)", center)
+	}
+
+	// Pixel in outer ring (10,10) should be red.
+	outer := c.GetPixel(10, 10)
+	if outer.R != 255 || outer.G != 0 || outer.B != 0 {
+		t.Errorf("EvenOdd outer pixel = %v, want red", outer)
+	}
+}
+
+func TestWindingFillRule(t *testing.T) {
+	// Same geometry as TestEvenOddFillRule but with winding rule.
+	// Both rects wound the same way, so center should be filled.
+	c := New(50, 50)
+	c.SetFillColor(color.RGBA{255, 0, 0, 255})
+	c.SetFillRule(FillRuleWinding)
+
+	c.BeginPath()
+	// Outer rect: 5,5 to 45,45
+	c.Rect(5, 5, 40, 40)
+	// Inner rect: 15,15 to 35,35
+	c.Rect(15, 15, 20, 20)
+	c.Fill()
+
+	// Center pixel (25,25) should be red (filled).
+	center := c.GetPixel(25, 25)
+	if center.R != 255 || center.G != 0 || center.B != 0 {
+		t.Errorf("Winding center pixel = %v, want red", center)
+	}
+
+	// Pixel in outer ring (10,10) should also be red.
+	outer := c.GetPixel(10, 10)
+	if outer.R != 255 || outer.G != 0 || outer.B != 0 {
+		t.Errorf("Winding outer pixel = %v, want red", outer)
 	}
 }
 

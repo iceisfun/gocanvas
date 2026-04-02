@@ -53,6 +53,18 @@ const (
 	TextBaselineBottom
 )
 
+// FillRule determines how the interior of a path is calculated.
+type FillRule uint8
+
+const (
+	// FillRuleWinding uses the non-zero winding number rule (default).
+	FillRuleWinding FillRule = iota
+
+	// FillRuleEvenOdd uses the even-odd rule, where overlapping
+	// sub-paths alternate between filled and unfilled.
+	FillRuleEvenOdd
+)
+
 // CompositeOp specifies the compositing operation used when blending pixels.
 type CompositeOp uint8
 
@@ -99,6 +111,9 @@ type drawState struct {
 
 	// Compositing.
 	compositeOp CompositeOp
+
+	// Fill rule.
+	fillRule FillRule
 
 	// Clip mask (nil = no clipping).
 	clip *image.Alpha
@@ -208,6 +223,33 @@ func (c *Canvas) SetTransform(m Matrix) {
 // ResetTransform sets the current transform to identity.
 func (c *Canvas) ResetTransform() {
 	c.state.matrix = Identity()
+}
+
+// RotateAbout applies a rotation around the point (x, y).
+func (c *Canvas) RotateAbout(radians, x, y float64) {
+	c.Translate(x, y)
+	c.Rotate(radians)
+	c.Translate(-x, -y)
+}
+
+// ScaleAbout applies scaling centered on the point (x, y).
+func (c *Canvas) ScaleAbout(sx, sy, x, y float64) {
+	c.Translate(x, y)
+	c.Scale(sx, sy)
+	c.Translate(-x, -y)
+}
+
+// ShearAbout applies a shear centered on the point (x, y).
+func (c *Canvas) ShearAbout(sx, sy, x, y float64) {
+	c.Translate(x, y)
+	c.Transform(SkewMatrix(sx, sy))
+	c.Translate(-x, -y)
+}
+
+// InvertY flips the Y axis so that Y increases upward.
+func (c *Canvas) InvertY() {
+	c.Translate(0, float64(c.height))
+	c.Scale(1, -1)
 }
 
 // --- Style setters ---
@@ -350,6 +392,11 @@ func (c *Canvas) SetCompositeOp(op CompositeOp) {
 	c.state.compositeOp = op
 }
 
+// SetFillRule sets the fill rule used by Fill and Clip operations.
+func (c *Canvas) SetFillRule(rule FillRule) {
+	c.state.fillRule = rule
+}
+
 // --- Path methods ---
 
 // BeginPath clears the current path.
@@ -413,7 +460,7 @@ func (c *Canvas) Clip() {
 	transformSubPaths(subPaths, c.state.matrix)
 	edges := buildEdges(subPaths)
 
-	mask := rasterizeMask(c.width, c.height, edges)
+	mask := rasterizeMask(c.width, c.height, edges, c.state.fillRule)
 
 	if c.state.clip != nil {
 		// Intersect: AND with existing clip.
@@ -467,6 +514,7 @@ func (c *Canvas) clipDraw(fn func(dst *image.RGBA)) {
 // fillEdges is the shared fill implementation respecting clip, shadow, gradient, and composite op.
 func (c *Canvas) fillEdges(edges []edge) {
 	op := c.state.compositeOp
+	fr := c.state.fillRule
 	if c.state.fillGradient != nil {
 		inv, ok := c.state.matrix.Invert()
 		if !ok {
@@ -474,22 +522,22 @@ func (c *Canvas) fillEdges(edges []edge) {
 		}
 		if c.hasShadow() {
 			c.renderWithShadow(func(dst *image.RGBA) {
-				rasterizeGradientFill(dst, edges, c.state.fillGradient, inv, c.state.globalAlpha, op)
+				rasterizeGradientFill(dst, edges, c.state.fillGradient, inv, c.state.globalAlpha, op, fr)
 			})
 		} else {
 			c.clipDraw(func(dst *image.RGBA) {
-				rasterizeGradientFill(dst, edges, c.state.fillGradient, inv, c.state.globalAlpha, op)
+				rasterizeGradientFill(dst, edges, c.state.fillGradient, inv, c.state.globalAlpha, op, fr)
 			})
 		}
 	} else {
 		fillColor := c.applyAlpha(c.state.fill)
 		if c.hasShadow() {
 			c.renderWithShadow(func(dst *image.RGBA) {
-				rasterizeFill(dst, edges, fillColor, op)
+				rasterizeFill(dst, edges, fillColor, op, fr)
 			})
 		} else {
 			c.clipDraw(func(dst *image.RGBA) {
-				rasterizeFill(dst, edges, fillColor, op)
+				rasterizeFill(dst, edges, fillColor, op, fr)
 			})
 		}
 	}
@@ -571,6 +619,7 @@ func (c *Canvas) strokeSubPaths(subPaths [][]Point) {
 func (c *Canvas) rasterizeOutlines(outlines [][]Point) {
 	edges := buildEdges(outlines)
 	op := c.state.compositeOp
+	// Stroke outlines always use winding rule (they are closed contours).
 	if c.state.strokeGradient != nil {
 		inv, ok := c.state.matrix.Invert()
 		if !ok {
@@ -578,22 +627,22 @@ func (c *Canvas) rasterizeOutlines(outlines [][]Point) {
 		}
 		if c.hasShadow() {
 			c.renderWithShadow(func(dst *image.RGBA) {
-				rasterizeGradientFill(dst, edges, c.state.strokeGradient, inv, c.state.globalAlpha, op)
+				rasterizeGradientFill(dst, edges, c.state.strokeGradient, inv, c.state.globalAlpha, op, FillRuleWinding)
 			})
 		} else {
 			c.clipDraw(func(dst *image.RGBA) {
-				rasterizeGradientFill(dst, edges, c.state.strokeGradient, inv, c.state.globalAlpha, op)
+				rasterizeGradientFill(dst, edges, c.state.strokeGradient, inv, c.state.globalAlpha, op, FillRuleWinding)
 			})
 		}
 	} else {
 		strokeColor := c.applyAlpha(c.state.stroke)
 		if c.hasShadow() {
 			c.renderWithShadow(func(dst *image.RGBA) {
-				rasterizeFill(dst, edges, strokeColor, op)
+				rasterizeFill(dst, edges, strokeColor, op, FillRuleWinding)
 			})
 		} else {
 			c.clipDraw(func(dst *image.RGBA) {
-				rasterizeFill(dst, edges, strokeColor, op)
+				rasterizeFill(dst, edges, strokeColor, op, FillRuleWinding)
 			})
 		}
 	}

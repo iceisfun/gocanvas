@@ -4,6 +4,8 @@ import (
 	"image"
 	"image/color"
 	"math"
+	"strings"
+	"unicode"
 )
 
 // TextMetrics contains measurements for rendered text.
@@ -157,6 +159,112 @@ func (c *Canvas) FillTextFit(text string, x, y, w, h float64, f *Font) error {
 	c.SetFont(face)
 	c.FillText(text, tx, ty)
 	return nil
+}
+
+// WordWrap splits text into lines that fit within maxWidth using the current font.
+// Returns nil if no font is set.
+func (c *Canvas) WordWrap(text string, maxWidth float64) []string {
+	ff := c.state.fontFace
+	if ff == nil {
+		return nil
+	}
+	return wordWrap(ff, text, maxWidth)
+}
+
+func splitOnSpace(x string) []string {
+	var result []string
+	pi := 0
+	ps := false
+	for i, c := range x {
+		s := unicode.IsSpace(c)
+		if s != ps && i > 0 {
+			result = append(result, x[pi:i])
+			pi = i
+		}
+		ps = s
+	}
+	result = append(result, x[pi:])
+	return result
+}
+
+func wordWrap(ff *FontFace, s string, width float64) []string {
+	var result []string
+	for _, line := range strings.Split(s, "\n") {
+		fields := splitOnSpace(line)
+		if len(fields)%2 == 1 {
+			fields = append(fields, "")
+		}
+		x := ""
+		for i := 0; i < len(fields); i += 2 {
+			m := measureText(ff, x+fields[i])
+			if m.Width > width {
+				if x == "" {
+					result = append(result, fields[i])
+					x = ""
+					continue
+				} else {
+					result = append(result, x)
+					x = ""
+				}
+			}
+			x += fields[i] + fields[i+1]
+		}
+		if x != "" {
+			result = append(result, x)
+		}
+	}
+	for i, line := range result {
+		result[i] = strings.TrimSpace(line)
+	}
+	return result
+}
+
+// FillTextWrapped renders word-wrapped text within the given width.
+// lineSpacing is a multiplier on the font height (1.0 = single space, 1.5 = 1.5x, etc).
+// Text alignment respects the current textAlign setting.
+func (c *Canvas) FillTextWrapped(text string, x, y, width, lineSpacing float64) {
+	ff := c.state.fontFace
+	if ff == nil {
+		return
+	}
+	lines := wordWrap(ff, text, width)
+	lineHeight := ff.Ascent() + ff.Descent()
+	spacing := lineHeight * lineSpacing
+
+	for i, line := range lines {
+		ly := y + float64(i)*spacing + ff.Ascent()
+		var lx float64
+		switch c.state.textAlign {
+		case TextAlignCenter:
+			lx = x + width/2
+		case TextAlignRight:
+			lx = x + width
+		default:
+			lx = x
+		}
+		c.FillText(line, lx, ly)
+	}
+}
+
+// MeasureTextWrapped measures the dimensions of word-wrapped text.
+func (c *Canvas) MeasureTextWrapped(text string, width, lineSpacing float64) (w, h float64) {
+	ff := c.state.fontFace
+	if ff == nil {
+		return 0, 0
+	}
+	lines := wordWrap(ff, text, width)
+	lineHeight := ff.Ascent() + ff.Descent()
+	spacing := lineHeight * lineSpacing
+
+	maxW := 0.0
+	for _, line := range lines {
+		m := measureText(ff, line)
+		if m.Width > maxW {
+			maxW = m.Width
+		}
+	}
+	h = float64(len(lines)) * spacing
+	return maxW, h
 }
 
 func fitText(text string, maxWidth, maxHeight float64, f *Font, minSize, maxSize float64) (*FontFace, error) {

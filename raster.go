@@ -57,9 +57,9 @@ func buildEdges(subPaths [][]Point) []edge {
 // aaSamples is the number of vertical sub-pixel samples used for anti-aliasing.
 const aaSamples = 8
 
-// rasterizeFill fills edges onto the destination image using non-zero winding rule
+// rasterizeFill fills edges onto the destination image using the given fill rule
 // with anti-aliased edges.
-func rasterizeFill(dst *image.RGBA, edges []edge, fill color.RGBA, op CompositeOp) {
+func rasterizeFill(dst *image.RGBA, edges []edge, fill color.RGBA, op CompositeOp, fillRule FillRule) {
 	if len(edges) == 0 {
 		return
 	}
@@ -158,7 +158,13 @@ func rasterizeFill(dst *image.RGBA, edges []edge, fill color.RGBA, op CompositeO
 			winding := 0
 			for i := 0; i < len(intercepts)-1; i++ {
 				winding += intercepts[i].dir
-				if winding != 0 {
+				inside := false
+				if fillRule == FillRuleEvenOdd {
+					inside = winding%2 != 0
+				} else {
+					inside = winding != 0
+				}
+				if inside {
 					leftX := intercepts[i].x
 					rightX := intercepts[i+1].x
 
@@ -355,8 +361,8 @@ func blendPixelPremul(dst *image.RGBA, x, y int, sr, sg, sb, sa uint32, op Compo
 	dst.Pix[off+3] = uint8(outA)
 }
 
-// rasterizeMask produces an alpha mask from edges using non-zero winding rule.
-func rasterizeMask(width, height int, edges []edge) *image.Alpha {
+// rasterizeMask produces an alpha mask from edges using the given fill rule.
+func rasterizeMask(width, height int, edges []edge, fillRule FillRule) *image.Alpha {
 	mask := image.NewAlpha(image.Rect(0, 0, width, height))
 	if len(edges) == 0 {
 		return mask
@@ -401,7 +407,13 @@ func rasterizeMask(width, height int, edges []edge) *image.Alpha {
 		winding := 0
 		for i := 0; i < len(intercepts)-1; i++ {
 			winding += intercepts[i].dir
-			if winding != 0 {
+			inside := false
+			if fillRule == FillRuleEvenOdd {
+				inside = winding%2 != 0
+			} else {
+				inside = winding != 0
+			}
+			if inside {
 				xStart := int(math.Ceil(intercepts[i].x - 0.5))
 				xEnd := int(math.Ceil(intercepts[i+1].x - 0.5))
 				if xStart < 0 {
@@ -642,7 +654,7 @@ func addCap(pts []Point, endpoint, adjacent Point, cap LineCap, halfW float64, _
 }
 
 // rasterizeGradientFill fills edges using a gradient for color sampling.
-func rasterizeGradientFill(dst *image.RGBA, edges []edge, grad Gradient, inv Matrix, alpha float64, op CompositeOp) {
+func rasterizeGradientFill(dst *image.RGBA, edges []edge, grad Gradient, inv Matrix, alpha float64, op CompositeOp, fillRule FillRule) {
 	if len(edges) == 0 {
 		return
 	}
@@ -691,7 +703,13 @@ func rasterizeGradientFill(dst *image.RGBA, edges []edge, grad Gradient, inv Mat
 		winding := 0
 		for i := 0; i < len(intercepts)-1; i++ {
 			winding += intercepts[i].dir
-			if winding != 0 {
+			inside := false
+			if fillRule == FillRuleEvenOdd {
+				inside = winding%2 != 0
+			} else {
+				inside = winding != 0
+			}
+			if inside {
 				xStart := int(math.Ceil(intercepts[i].x - 0.5))
 				xEnd := int(math.Ceil(intercepts[i+1].x - 0.5))
 				if xStart < bounds.Min.X {

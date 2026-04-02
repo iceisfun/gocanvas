@@ -380,6 +380,94 @@ func TestGoldenFillTextFit(t *testing.T) {
 	})
 }
 
+func TestWordWrapBasic(t *testing.T) {
+	f := loadTestFont(t)
+	face, err := f.NewFace(16)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	c := New(400, 200)
+	c.SetFont(face)
+
+	lines := c.WordWrap("The quick brown fox jumps over the lazy dog", 100)
+	if len(lines) < 2 {
+		t.Errorf("WordWrap: expected multiple lines, got %d: %v", len(lines), lines)
+	}
+	for i, line := range lines {
+		if line == "" {
+			t.Errorf("WordWrap: line %d is empty", i)
+		}
+	}
+}
+
+func TestWordWrapNewlines(t *testing.T) {
+	f := loadTestFont(t)
+	face, err := f.NewFace(16)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	c := New(400, 200)
+	c.SetFont(face)
+
+	lines := c.WordWrap("Hello\nWorld", 1000)
+	if len(lines) != 2 {
+		t.Errorf("WordWrap with newline: expected 2 lines, got %d: %v", len(lines), lines)
+	}
+	if len(lines) == 2 {
+		if lines[0] != "Hello" || lines[1] != "World" {
+			t.Errorf("WordWrap with newline: got %v, want [Hello World]", lines)
+		}
+	}
+}
+
+func TestWordWrapLongWord(t *testing.T) {
+	f := loadTestFont(t)
+	face, err := f.NewFace(16)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	c := New(400, 200)
+	c.SetFont(face)
+
+	lines := c.WordWrap("Supercalifragilisticexpialidocious", 50)
+	if len(lines) != 1 {
+		t.Errorf("WordWrap long word: expected 1 line, got %d: %v", len(lines), lines)
+	}
+	if len(lines) > 0 && lines[0] != "Supercalifragilisticexpialidocious" {
+		t.Errorf("WordWrap long word: got %q, want original word", lines[0])
+	}
+}
+
+func TestWordWrapNoFont(t *testing.T) {
+	c := New(400, 200)
+	lines := c.WordWrap("Hello World", 100)
+	if lines != nil {
+		t.Error("WordWrap with no font: expected nil")
+	}
+}
+
+func TestMeasureTextWrapped(t *testing.T) {
+	f := loadTestFont(t)
+	face, err := f.NewFace(16)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	c := New(400, 200)
+	c.SetFont(face)
+
+	w, h := c.MeasureTextWrapped("The quick brown fox jumps over the lazy dog", 100, 1.2)
+	if w <= 0 {
+		t.Errorf("MeasureTextWrapped width = %v, want > 0", w)
+	}
+	if h <= 0 {
+		t.Errorf("MeasureTextWrapped height = %v, want > 0", h)
+	}
+}
+
 // maxNonWhiteX returns the largest x coordinate of a non-white pixel.
 func maxNonWhiteX(c *Canvas) int {
 	b := c.Image().Bounds()

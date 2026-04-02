@@ -515,3 +515,78 @@ func TestCanvasRoundRectPath(t *testing.T) {
 		t.Errorf("RoundRect path fill center = %v, want red", got)
 	}
 }
+
+func TestRotateAbout(t *testing.T) {
+	// Rotate 90 degrees about center (20,20) on a 40x40 canvas.
+	// Draw a rect at (25,15,5,5). Transform is T(20,20)*R(90)*T(-20,-20).
+	// Point (x,y) maps to (40-y, x). Rect corners:
+	//   (25,15)->(25,25), (30,15)->(25,30), (30,20)->(20,30), (25,20)->(20,25)
+	// So rotated rect occupies (20,25)-(25,30).
+	c := New(40, 40)
+	c.SetFillColor(RGB(255, 0, 0))
+	c.RotateAbout(math.Pi/2, 20, 20)
+	c.FillRect(25, 15, 5, 5)
+
+	// The rotated rect should appear at (20,25)-(25,30).
+	got := c.Image().RGBAAt(22, 27)
+	if got.R != 255 || got.G != 0 || got.B != 0 {
+		t.Errorf("RotateAbout: expected red at rotated position, got %v", got)
+	}
+
+	// The original (unrotated) position should be white.
+	got = c.Image().RGBAAt(27, 16)
+	if got != (color.RGBA{255, 255, 255, 255}) {
+		t.Errorf("RotateAbout: expected white at original position, got %v", got)
+	}
+}
+
+func TestScaleAbout(t *testing.T) {
+	// Scale 2x about center (20,20). Draw a rect at (15,15,10,10).
+	// The rect center is at (20,20) which is the scale center, so it stays put.
+	// But the rect expands from 10x10 to 20x20 around the center.
+	c := New(40, 40)
+	c.SetFillColor(RGB(0, 0, 255))
+	c.ScaleAbout(2, 2, 20, 20)
+	c.FillRect(15, 15, 10, 10)
+
+	// Center pixel (20,20) should be filled.
+	got := c.Image().RGBAAt(20, 20)
+	if got.B != 255 {
+		t.Errorf("ScaleAbout: center pixel = %v, want blue", got)
+	}
+
+	// After 2x scale about (20,20), corner (15,15) maps to (10,10).
+	// So pixel at (12,12) should be filled (inside the scaled rect).
+	got = c.Image().RGBAAt(12, 12)
+	if got.B != 255 {
+		t.Errorf("ScaleAbout: expanded region = %v, want blue", got)
+	}
+
+	// A pixel well outside the expanded rect should be white.
+	got = c.Image().RGBAAt(2, 2)
+	if got != (color.RGBA{255, 255, 255, 255}) {
+		t.Errorf("ScaleAbout: exterior = %v, want white", got)
+	}
+}
+
+func TestInvertY(t *testing.T) {
+	// Call InvertY, then draw a rect at (0, 0, 10, 10).
+	// With InvertY, Y=0 maps to the bottom of the canvas.
+	// So the rect should appear at the bottom, not the top.
+	c := New(40, 40)
+	c.SetFillColor(RGB(0, 255, 0))
+	c.InvertY()
+	c.FillRect(0, 0, 10, 10)
+
+	// The rect should appear at the bottom of the canvas (y=30..40).
+	got := c.Image().RGBAAt(5, 35)
+	if got.G != 255 {
+		t.Errorf("InvertY: bottom pixel = %v, want green", got)
+	}
+
+	// The top of the canvas should be white.
+	got = c.Image().RGBAAt(5, 5)
+	if got != (color.RGBA{255, 255, 255, 255}) {
+		t.Errorf("InvertY: top pixel = %v, want white", got)
+	}
+}

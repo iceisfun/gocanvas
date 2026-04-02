@@ -4,6 +4,13 @@
 // creation, image loading, font loading, drawing operations, transforms,
 // and annotation helpers to Lua scripts.
 //
+// Gradients include linear, radial, and conic (canvas.conic_gradient).
+// Fill rule can be set via set_fill_rule ("winding" or "evenodd").
+// Convenience transforms rotate_about, scale_about, shear_about, and
+// invert_y are available alongside the standard transform methods.
+// Text support includes word_wrap and fill_text_wrapped for word-wrapped
+// text layout and rendering.
+//
 // Basic usage:
 //
 //	v := vm.New()
@@ -59,6 +66,7 @@ func (b *Bindings) Register(v *vm.VM) {
 	mod.SetString("load_font", vm.NewNativeFunc(b.canvasLoadFont))
 	mod.SetString("linear_gradient", vm.NewNativeFunc(b.canvasLinearGradient))
 	mod.SetString("radial_gradient", vm.NewNativeFunc(b.canvasRadialGradient))
+	mod.SetString("conic_gradient", vm.NewNativeFunc(b.canvasConicGradient))
 	v.SetGlobal("canvas", vm.NewTable(mod))
 }
 
@@ -330,6 +338,22 @@ func (b *Bindings) canvasToLua(c *gocanvas.Canvas) *vm.Table {
 		c.ResetTransform()
 		return 0
 	}))
+	t.SetString("rotate_about", vm.NewNativeFunc(func(v *vm.VM) int {
+		c.RotateAbout(v.Get(2).AsFloat(), v.Get(3).AsFloat(), v.Get(4).AsFloat())
+		return 0
+	}))
+	t.SetString("scale_about", vm.NewNativeFunc(func(v *vm.VM) int {
+		c.ScaleAbout(v.Get(2).AsFloat(), v.Get(3).AsFloat(), v.Get(4).AsFloat(), v.Get(5).AsFloat())
+		return 0
+	}))
+	t.SetString("shear_about", vm.NewNativeFunc(func(v *vm.VM) int {
+		c.ShearAbout(v.Get(2).AsFloat(), v.Get(3).AsFloat(), v.Get(4).AsFloat(), v.Get(5).AsFloat())
+		return 0
+	}))
+	t.SetString("invert_y", vm.NewNativeFunc(func(v *vm.VM) int {
+		c.InvertY()
+		return 0
+	}))
 	t.SetString("set_stroke_mode", vm.NewNativeFunc(func(v *vm.VM) int {
 		mode := v.Get(2)
 		if !mode.IsString() {
@@ -408,6 +432,23 @@ func (b *Bindings) canvasToLua(c *gocanvas.Canvas) *vm.Table {
 			panic(&vm.LuaError{Value: vm.NewString("set_composite_op: unknown operation: " + arg.AsString())})
 		}
 		c.SetCompositeOp(op)
+		return 0
+	}))
+
+	// Fill rule.
+	t.SetString("set_fill_rule", vm.NewNativeFunc(func(v *vm.VM) int {
+		arg := v.Get(2)
+		if !arg.IsString() {
+			panic(&vm.LuaError{Value: vm.NewString("set_fill_rule: expected \"winding\" or \"evenodd\"")})
+		}
+		switch arg.AsString() {
+		case "winding":
+			c.SetFillRule(gocanvas.FillRuleWinding)
+		case "evenodd":
+			c.SetFillRule(gocanvas.FillRuleEvenOdd)
+		default:
+			panic(&vm.LuaError{Value: vm.NewString("set_fill_rule: expected \"winding\" or \"evenodd\"")})
+		}
 		return 0
 	}))
 
@@ -593,6 +634,37 @@ func (b *Bindings) canvasToLua(c *gocanvas.Canvas) *vm.Table {
 		return 0
 	}))
 
+	t.SetString("word_wrap", vm.NewNativeFunc(func(v *vm.VM) int {
+		text := v.Get(2)
+		if !text.IsString() {
+			panic(&vm.LuaError{Value: vm.NewString("word_wrap: first argument must be a string")})
+		}
+		width := v.Get(3).AsFloat()
+		lines := c.WordWrap(text.AsString(), width)
+		result := vm.NewEmptyTable()
+		for i, line := range lines {
+			result.Set(vm.NewInt(int64(i+1)), vm.NewString(line))
+		}
+		v.Set(0, vm.NewTable(result))
+		return 1
+	}))
+
+	t.SetString("fill_text_wrapped", vm.NewNativeFunc(func(v *vm.VM) int {
+		text := v.Get(2)
+		if !text.IsString() {
+			panic(&vm.LuaError{Value: vm.NewString("fill_text_wrapped: first argument must be a string")})
+		}
+		x := v.Get(3).AsFloat()
+		y := v.Get(4).AsFloat()
+		width := v.Get(5).AsFloat()
+		lineSpacing := 1.2
+		if arg := v.Get(6); arg.IsNumber() {
+			lineSpacing = arg.AsFloat()
+		}
+		c.FillTextWrapped(text.AsString(), x, y, width, lineSpacing)
+		return 0
+	}))
+
 	// Annotations.
 	t.SetString("draw_labeled_box", vm.NewNativeFunc(func(v *vm.VM) int {
 		label := v.Get(2)
@@ -735,6 +807,35 @@ func (b *Bindings) canvasRadialGradient(v *vm.VM) int {
 	cy1 := v.Get(5).AsFloat()
 	r1 := v.Get(6).AsFloat()
 	g := gocanvas.NewRadialGradient(cx0, cy0, r0, cx1, cy1, r1)
+
+	b.nextGradID++
+	id := b.nextGradID
+	b.gradients[id] = g
+
+	t := vm.NewEmptyTable()
+	t.SetString("_id", vm.NewInt(id))
+	t.SetString("add_color_stop", vm.NewNativeFunc(func(v *vm.VM) int {
+		pos := v.Get(2).AsFloat()
+		r := uint8(v.Get(3).AsInt())
+		gv := uint8(v.Get(4).AsInt())
+		bv := uint8(v.Get(5).AsInt())
+		a := uint8(255)
+		if arg := v.Get(6); arg.IsNumber() {
+			a = uint8(arg.AsInt())
+		}
+		g.AddColorStop(pos, color.RGBA{R: r, G: gv, B: bv, A: a})
+		return 0
+	}))
+
+	v.Set(0, vm.NewTable(t))
+	return 1
+}
+
+func (b *Bindings) canvasConicGradient(v *vm.VM) int {
+	cx := v.Get(1).AsFloat()
+	cy := v.Get(2).AsFloat()
+	deg := v.Get(3).AsFloat()
+	g := gocanvas.NewConicGradient(cx, cy, deg)
 
 	b.nextGradID++
 	id := b.nextGradID

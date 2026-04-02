@@ -153,6 +153,47 @@ func interpolateStops(stops []colorStop, t float64) color.RGBA {
 	return stops[len(stops)-1].Color
 }
 
+// ConicGradient defines a conic (angular) color gradient around a center point.
+type ConicGradient struct {
+	CX, CY   float64 // center
+	Rotation float64 // rotation offset, normalized to 0-1
+	stops    []colorStop
+}
+
+// NewConicGradient creates a conic gradient centered at (cx, cy) with the
+// given rotation in degrees. Colors sweep angularly around the center.
+func NewConicGradient(cx, cy, degrees float64) *ConicGradient {
+	// Normalize degrees to [0, 360), then to [0, 1).
+	deg := math.Mod(degrees, 360)
+	if deg < 0 {
+		deg += 360
+	}
+	return &ConicGradient{CX: cx, CY: cy, Rotation: deg / 360}
+}
+
+// AddColorStop adds a color stop at the given position (0-1).
+func (g *ConicGradient) AddColorStop(position float64, col color.RGBA) {
+	g.stops = append(g.stops, colorStop{Position: position, Color: col})
+	sort.Slice(g.stops, func(i, j int) bool {
+		return g.stops[i].Position < g.stops[j].Position
+	})
+}
+
+// ColorAt returns the interpolated gradient color at the given pixel position.
+func (g *ConicGradient) ColorAt(x, y float64) color.RGBA {
+	if len(g.stops) == 0 {
+		return color.RGBA{}
+	}
+	a := math.Atan2(y-g.CY, x-g.CX)
+	// Normalize from [-π, π] to [0, 1].
+	t := (a + math.Pi) / (2 * math.Pi)
+	t -= g.Rotation
+	if t < 0 {
+		t += 1
+	}
+	return interpolateStops(g.stops, t)
+}
+
 // lerpColor linearly interpolates between two colors.
 func lerpColor(a, b color.RGBA, t float64) color.RGBA {
 	return color.RGBA{
