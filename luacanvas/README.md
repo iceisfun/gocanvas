@@ -73,6 +73,7 @@ go run ./luacanvas/cmd/gocanvas/ examples/basic.lua
 | `canvas.load_font(path)` | Load a TTF/OTF font. Returns `{_id}`. |
 | `canvas.linear_gradient(x0, y0, x1, y1)` | Create a linear gradient. Returns a gradient object. |
 | `canvas.radial_gradient(cx0, cy0, r0, cx1, cy1, r1)` | Create a radial gradient. Returns a gradient object. |
+| `canvas.conic_gradient(cx, cy, degrees)` | Create a conic (angle) gradient centered at `(cx, cy)`. Returns a gradient object. |
 
 ### Canvas Methods
 
@@ -96,11 +97,13 @@ All methods use `:` syntax (e.g. `c:fill_rect(0, 0, 100, 50)`).
 | `c:set_text_align(align)` | `"left"`, `"center"`, or `"right"`. |
 | `c:set_text_baseline(baseline)` | `"alphabetic"`, `"top"`, `"middle"`, or `"bottom"`. |
 | `c:set_composite_op(op)` | Set compositing: `"source-over"`, `"multiply"`, `"screen"`, `"lighter"`, etc. |
+| `c:set_fill_rule(rule)` | Set the fill rule: `"winding"` (default) or `"evenodd"`. |
 
 #### Gradients
 
-Gradient objects are created via `canvas.linear_gradient()` or
-`canvas.radial_gradient()` and support `:add_color_stop()`:
+Gradient objects are created via `canvas.linear_gradient()`,
+`canvas.radial_gradient()`, or `canvas.conic_gradient()` and support
+`:add_color_stop()`:
 
 ```lua
 local g = canvas.linear_gradient(0, 0, 400, 0)
@@ -160,6 +163,10 @@ Setting a solid color with `set_fill_color` clears the gradient, and vice versa.
 | `c:set_transform(a, b, tx, c, d, ty)` | Replace the current matrix. |
 | `c:transform(a, b, tx, c, d, ty)` | Multiply into the current matrix. |
 | `c:reset_transform()` | Reset to identity. |
+| `c:rotate_about(radians, x, y)` | Rotate around the point `(x, y)`. |
+| `c:scale_about(sx, sy, x, y)` | Scale around the point `(x, y)`. |
+| `c:shear_about(sx, sy, x, y)` | Shear around the point `(x, y)`. |
+| `c:invert_y()` | Flip the Y axis (useful for math-style coordinates). |
 
 #### Text
 
@@ -171,6 +178,8 @@ Setting a solid color with `set_fill_color` clears the gradient, and vice versa.
 | `c:measure_text(text [, opts])` | Returns `{width, height, ascent, descent}`. |
 | `c:fit_text(text, w, h, font [, min, max])` | Find largest size that fits. Returns `{width, height, ascent, descent, font_size}`. |
 | `c:fill_text_fit(text, x, y, w, h, font)` | Auto-fit and draw text centered in a box. |
+| `c:word_wrap(text, width)` | Word-wrap text to fit within `width`. Returns a table of lines. |
+| `c:fill_text_wrapped(text, x, y, width [, lineSpacing])` | Draw word-wrapped filled text. `lineSpacing` defaults to 1.2. |
 
 `measure_text` accepts an optional table `{font=, font_size=}` to measure
 without changing the canvas state:

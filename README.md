@@ -3,6 +3,9 @@
 A 2D drawing library for Go inspired by the HTML5 Canvas API. Renders to
 in-memory RGBA images with no CGo or platform dependencies.
 
+[![Go Reference](https://pkg.go.dev/badge/github.com/iceisfun/gocanvas.svg)](https://pkg.go.dev/github.com/iceisfun/gocanvas)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
 ```go
 import "github.com/iceisfun/gocanvas"
 ```
@@ -22,7 +25,10 @@ import "github.com/iceisfun/gocanvas"
 - TrueType/OpenType font loading, text measurement, auto-fit, text alignment
 - Image drawing with source/destination rectangles (`DrawImage`)
 - Annotation helpers for labeled bounding boxes and polygons
-- Linear and radial gradients for fill and stroke
+- Linear, radial, and conic gradients for fill and stroke
+- Even-odd fill rule for complex paths with holes
+- Word wrapping and multi-line text rendering
+- Convenience transforms (RotateAbout, ScaleAbout, ShearAbout, InvertY)
 - Save/restore state stack
 
 ## Quick Start
@@ -90,6 +96,11 @@ c.Rotate(math.Pi / 4)
 c.SetTransform(gocanvas.Matrix{a, b, tx, c, d, ty})
 c.Transform(gocanvas.Matrix{a, b, tx, c, d, ty}) // multiply into current
 c.ResetTransform()
+
+// Convenience: transform around a point.
+c.RotateAbout(math.Pi/4, 200, 150) // rotate 45° around (200,150)
+c.ScaleAbout(2, 2, 200, 150)       // scale 2x centered on (200,150)
+c.InvertY()                         // flip Y axis (math-style coordinates)
 ```
 
 ## Rounded Rectangles
@@ -114,6 +125,17 @@ c.Clip()                            // only draw inside the circle
 c.FillRect(0, 0, 400, 300)         // clipped to circle
 c.Restore()                         // restores previous clip
 c.ResetClip()                       // or explicitly remove clip
+```
+
+## Fill Rules
+
+```go
+// Even-odd rule creates holes where paths overlap.
+c.SetFillRule(gocanvas.FillRuleEvenOdd)
+c.BeginPath()
+c.Rect(10, 10, 200, 200)   // outer
+c.Rect(50, 50, 100, 100)   // inner (becomes hole)
+c.Fill()
 ```
 
 ## Composite Operations
@@ -153,6 +175,19 @@ c.SetFont(fitted)
 c.FillTextFit("hello", 10, 10, 200, 40, font)
 ```
 
+## Word Wrapping
+
+```go
+// Wrap text to fit within a width.
+lines := c.WordWrap("The quick brown fox jumps over the lazy dog.", 200)
+
+// Draw word-wrapped text with 1.5x line spacing.
+c.FillTextWrapped("Long text here...", 10, 10, 300, 1.5)
+
+// Measure wrapped text dimensions.
+w, h := c.MeasureTextWrapped("Long text...", 300, 1.5)
+```
+
 ## Annotations
 
 ```go
@@ -165,7 +200,7 @@ gocanvas.DrawLabeledBox(c, "owl 0.97", 100, 50, 300, 400, style)
 
 ## Gradients
 
-Fill and stroke operations support linear and radial gradients. Gradient
+Fill and stroke operations support linear, radial, and conic gradients. Gradient
 coordinates are in world space and transform with the current matrix.
 
 ```go
@@ -181,6 +216,15 @@ rg := gocanvas.NewRadialGradient(200, 150, 10, 200, 150, 150)
 rg.AddColorStop(0, gocanvas.RGB(255, 255, 200))
 rg.AddColorStop(1, gocanvas.RGBA(0, 0, 0, 0))
 c.SetFillGradient(rg)
+c.FillRect(0, 0, 400, 300)
+
+// Conic gradient (color wheel).
+cg := gocanvas.NewConicGradient(200, 150, 0)
+cg.AddColorStop(0, gocanvas.RGB(255, 0, 0))
+cg.AddColorStop(0.33, gocanvas.RGB(0, 255, 0))
+cg.AddColorStop(0.66, gocanvas.RGB(0, 0, 255))
+cg.AddColorStop(1, gocanvas.RGB(255, 0, 0))
+c.SetFillGradient(cg)
 c.FillRect(0, 0, 400, 300)
 
 // Setting a solid color clears the gradient.
